@@ -1,0 +1,10 @@
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.5
+lightgbm>=4.5
+requests>=2.32
+python-dotenv>=1.0
+pybaseball>=2.2
+joblib>=1.4
+streamlit>=1.40
+pyarrow>=17.0
