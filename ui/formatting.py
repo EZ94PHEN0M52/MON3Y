@@ -7,11 +7,15 @@ from ui.glossary import MARKET_LABELS
 
 PROBABILITY_COLUMNS = (
     "model_probability",
+    "calibrated_probability",
     "over_probability",
     "under_probability",
     "market_probability",
+    "devigged_market_prob",
     "edge",
+    "consensus_edge",
     "ev",
+    "best_ev",
 )
 
 
@@ -130,3 +134,13 @@ def top_list_path(view):
     from urllib.parse import urlencode
 
     return "/?" + urlencode({"view": view})
+
+
+def format_batter_score_cell(score, label=""):
+    """Board column: score with optional partial label."""
+    if pd.isna(score):
+        return "—"
+    text = f"{float(score):.1f}"
+    if isinstance(label, str) and label.strip():
+        text = f"{text} · {label.strip()}"
+    return text

@@ -18,6 +18,11 @@ from features_v2 import (
     PITCHER_FEATURES_V2_EXTRA,
 )
 
+from training_odds import (
+    DERIVED_LINE_FEATURES,
+    load_historical_props,
+    match_props_to_features,
+)
 from utils import (
     batter_features_path,
     pitcher_features_path,
@@ -72,7 +77,12 @@ BATTER_MARKETS = {
         1.5,
         2.5,
         3.5
-    ]
+    ],
+
+    "stolen_bases": [
+        0.5,
+        1.5
+    ],
 }
 
 
@@ -128,11 +138,16 @@ PITCHER_MARKETS = {
 # stat lists in build_features.py (build_all_features). V2 extras
 # live in features_v2.py. scripts/ensure_features.py reads required
 # columns via feature_columns_for_version() below — bump
-# FEATURE_SCHEMA_VERSION when adding or renaming model inputs.
+# PARQUET_FEATURE_SCHEMA_VERSION when adding or renaming parquet columns.
+# Derived model inputs (DERIVED_LINE_FEATURES) are added at train/infer time
+# and do not require a parquet rebuild.
 # =========================================================
 
-# Bump when feature column lists or build logic change materially.
-FEATURE_SCHEMA_VERSION = "2"
+# Bump only when BATTER_FEATURES / PITCHER_FEATURES (or V2 extras) change.
+PARQUET_FEATURE_SCHEMA_VERSION = "3"
+
+# Metadata alias written by build_features.py (same as parquet schema version).
+FEATURE_SCHEMA_VERSION = PARQUET_FEATURE_SCHEMA_VERSION
 
 BATTER_FEATURES = [
     "hits_l3",
@@ -170,6 +185,11 @@ BATTER_FEATURES = [
     "hits_runs_rbis_l5",
     "hits_runs_rbis_l10",
     "hits_runs_rbis_season",
+
+    "stolen_bases_l3",
+    "stolen_bases_l5",
+    "stolen_bases_l10",
+    "stolen_bases_season",
 
     "plate_appearances",
 
@@ -241,6 +261,25 @@ def feature_columns_for_version(
     }
 
 
+def model_feature_columns(
+    version,
+):
+    """
+    Parquet stat features plus line-derived inputs used at train/infer time.
+    """
+
+    feature_sets = feature_columns_for_version(
+        version
+    )
+
+    return {
+        role: (
+            cols + DERIVED_LINE_FEATURES
+        )
+        for role, cols in feature_sets.items()
+    }
+
+
 def feature_schema_fingerprint(
     version,
 ):
@@ -254,7 +293,7 @@ def feature_schema_fingerprint(
     )
 
     payload = (
-        f"{FEATURE_SCHEMA_VERSION}|{version}|"
+        f"{PARQUET_FEATURE_SCHEMA_VERSION}|{version}|"
         f"batter:{','.join(feature_sets['batter'])}|"
         f"pitcher:{','.join(feature_sets['pitcher'])}"
     )
@@ -264,6 +303,78 @@ def feature_schema_fingerprint(
     ).hexdigest()[
         :16
     ]
+
+
+def valid_parquet_fingerprints(
+    version,
+) -> frozenset[str]:
+    """
+    Fingerprints accepted for existing parquets.
+
+    Includes legacy hashes from when FEATURE_SCHEMA_VERSION was briefly
+    bumped for derived-only model inputs (Phase 3).
+    """
+
+    version = normalize_version(
+        version
+    )
+
+    feature_sets = feature_columns_for_version(
+        version
+    )
+
+    batter = ",".join(
+        feature_sets["batter"]
+    )
+    pitcher = ",".join(
+        feature_sets["pitcher"]
+    )
+
+    fingerprints = {
+        feature_schema_fingerprint(
+            version
+        )
+    }
+
+    for legacy_version in (
+        "2",
+        "3",
+    ):
+        payload = (
+            f"{legacy_version}|{version}|"
+            f"batter:{batter}|"
+            f"pitcher:{pitcher}"
+        )
+        fingerprints.add(
+            hashlib.sha256(
+                payload.encode()
+            ).hexdigest()[
+                :16
+            ]
+        )
+
+    return frozenset(
+        fingerprints
+    )
+
+
+def parquet_schema_is_stale(
+    stored_fingerprint,
+    version,
+) -> bool:
+    """
+    True when parquet metadata fingerprint does not match current columns.
+
+    Parquets without metadata fingerprints are not treated as stale; required
+    column presence is validated separately.
+    """
+
+    if stored_fingerprint is None:
+        return False
+
+    return stored_fingerprint not in valid_parquet_fingerprints(
+        version
+    )
 
 
 def validate_feature_columns(
@@ -300,21 +411,16 @@ def validate_feature_columns(
 # BUILD TRAINING ROWS
 # =========================================================
 
-def create_training_rows(
+def create_training_rows_synthetic(
     df,
     player_col,
     target,
     line_values,
-    feature_columns
+    feature_columns,
 ):
-
     rows = []
 
     usable = df.copy()
-
-    # -----------------------------------------------------
-    # Keep only rows where we have at least some history.
-    # -----------------------------------------------------
 
     usable = usable[
         usable[
@@ -335,6 +441,13 @@ def create_training_rows(
 
         temp["market"] = target
 
+        temp["market_implied_over_prob"] = np.nan
+
+        temp["line_vs_season_avg"] = (
+            temp["line"]
+            - temp[f"{target}_season"]
+        )
+
         keep = [
             "game_date",
             player_col,
@@ -343,7 +456,9 @@ def create_training_rows(
             target,
             "line",
             "target",
-            "market"
+            "market",
+            "market_implied_over_prob",
+            "line_vs_season_avg",
         ]
 
         keep += feature_columns
@@ -364,12 +479,56 @@ def create_training_rows(
 
         return pd.DataFrame()
 
-    result = pd.concat(
+    return pd.concat(
         rows,
-        ignore_index=True
+        ignore_index=True,
     )
 
-    return result
+
+def create_training_rows(
+    df,
+    player_col,
+    target,
+    line_values,
+    feature_columns,
+    line_source="auto",
+    historical_props=None,
+):
+    use_real = line_source in (
+        "real",
+        "auto",
+    )
+
+    if use_real and historical_props is not None:
+
+        real_rows = match_props_to_features(
+            df,
+            historical_props,
+            player_col,
+            target,
+            feature_columns,
+        )
+
+        if line_source == "real":
+            return real_rows
+
+        if len(real_rows) >= 100:
+            return real_rows
+
+        if not real_rows.empty:
+            print(
+                f"  Real-line rows ({len(real_rows)}) "
+                "below minimum; falling back to "
+                "synthetic thresholds."
+            )
+
+    return create_training_rows_synthetic(
+        df,
+        player_col,
+        target,
+        line_values,
+        feature_columns,
+    )
 
 
 # =========================================================
@@ -630,6 +789,17 @@ def main():
         help="Model version to train (default: v2)"
     )
 
+    parser.add_argument(
+        "--line-source",
+        default="auto",
+        choices=["real", "synthetic", "auto"],
+        help=(
+            "Training line source: real book consensus lines, "
+            "synthetic threshold grids, or auto (real when "
+            "historical props exist, else synthetic)"
+        ),
+    )
+
     args = parser.parse_args()
 
     version = normalize_version(
@@ -639,6 +809,45 @@ def main():
     feature_sets = feature_columns_for_version(
         version
     )
+
+    model_features = model_feature_columns(
+        version
+    )
+
+    historical_props = None
+
+    if args.line_source in (
+        "real",
+        "auto",
+    ):
+        historical_props = load_historical_props(
+            args.start,
+            args.end,
+        )
+
+        if historical_props.empty:
+            print()
+            print(
+                "No historical props found for "
+                f"{args.start} → {args.end}."
+            )
+
+            if args.line_source == "real":
+                print(
+                    "Cannot train with --line-source real "
+                    "without historical props."
+                )
+                return
+
+            print(
+                "Using synthetic threshold lines."
+            )
+        else:
+            print()
+            print(
+                f"Loaded {len(historical_props):,} "
+                "historical prop rows for training."
+            )
 
     batter_path = batter_features_path(
         args.start,
@@ -696,7 +905,9 @@ def main():
             "batter",
             target,
             lines,
-            feature_sets["batter"]
+            feature_sets["batter"],
+            line_source=args.line_source,
+            historical_props=historical_props,
         )
 
         if len(training) < 100:
@@ -707,9 +918,20 @@ def main():
 
             continue
 
+        real_count = (
+            training["market_implied_over_prob"]
+            .notna()
+            .sum()
+        )
+
+        print(
+            f"  Training rows: {len(training):,} "
+            f"({real_count:,} with real book lines)"
+        )
+
         train_model(
             training,
-            feature_sets["batter"],
+            model_features["batter"],
             f"batter_{target}",
             version
         )
@@ -732,7 +954,9 @@ def main():
             "pitcher",
             target,
             lines,
-            feature_sets["pitcher"]
+            feature_sets["pitcher"],
+            line_source=args.line_source,
+            historical_props=historical_props,
         )
 
         if len(training) < 100:
@@ -743,9 +967,20 @@ def main():
 
             continue
 
+        real_count = (
+            training["market_implied_over_prob"]
+            .notna()
+            .sum()
+        )
+
+        print(
+            f"  Training rows: {len(training):,} "
+            f"({real_count:,} with real book lines)"
+        )
+
         train_model(
             training,
-            feature_sets["pitcher"],
+            model_features["pitcher"],
             f"pitcher_{target}",
             version
         )

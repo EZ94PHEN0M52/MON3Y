@@ -4,6 +4,7 @@ import streamlit as st
 
 from ui.board import (
     RANKING_TABLE_COLUMNS,
+    _apply_ranking_market_filter,
     _prepare_board_table_df,
     _ranking_column_config,
     apply_top_level_filters,
@@ -13,15 +14,32 @@ from ui.glossary import EDGE_CALLOUT, GLOSSARY
 from ui.player import render_back_to_board
 
 
-def _render_ranked_table(filtered, sort_col):
+def _render_ranked_table(filtered, sort_col, key_prefix):
     if filtered.empty:
         st.info("No props meet the current filters.")
         return
 
-    ranked = filtered.sort_values(sort_col, ascending=False).reset_index(drop=True)
+    ranking_markets = st.session_state.get(f"{key_prefix}_markets", [])
+    ranked_df = _apply_ranking_market_filter(
+        filtered,
+        ranking_markets,
+    )
+
+    if ranked_df.empty:
+        st.info("No props meet the current market type filter.")
+        return
+
+    ranked = ranked_df.sort_values(
+        sort_col,
+        ascending=False,
+    ).reset_index(drop=True)
     display = _prepare_board_table_df(ranked)[RANKING_TABLE_COLUMNS]
 
-    st.caption(f"Showing **{len(ranked)}** props ranked by **{sort_col.replace('_', ' ')}**.")
+    st.caption(
+        f"Showing **{len(ranked)}** props ranked by "
+        f"**{sort_col.replace('_', ' ')}** "
+        "(one best book per player and market)."
+    )
     st.dataframe(
         style_probability_extremes(display),
         hide_index=True,
@@ -35,8 +53,15 @@ def render_top_over_page(df, version):
     st.title("Top Over %")
     st.caption(GLOSSARY["top_over_list"])
 
-    filtered = apply_top_level_filters(df, key_prefix=f"top_over_{version}")
-    _render_ranked_table(filtered, "over_probability")
+    filtered = apply_top_level_filters(
+        df,
+        key_prefix=f"top_over_{version}",
+    )
+    _render_ranked_table(
+        filtered,
+        "over_probability",
+        key_prefix=f"top_over_{version}",
+    )
 
     st.divider()
     st.caption(EDGE_CALLOUT)
@@ -52,9 +77,16 @@ def render_top_under_page(df, version):
     st.title("Top Under %")
     st.caption(GLOSSARY["top_under_list"])
 
-    filtered = apply_top_level_filters(df, key_prefix=f"top_under_{version}")
+    filtered = apply_top_level_filters(
+        df,
+        key_prefix=f"top_under_{version}",
+    )
     filtered = filtered[filtered["market"] != "batter_home_runs"]
-    _render_ranked_table(filtered, "under_probability")
+    _render_ranked_table(
+        filtered,
+        "under_probability",
+        key_prefix=f"top_under_{version}",
+    )
 
     st.divider()
     st.caption(EDGE_CALLOUT)

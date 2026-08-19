@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Ensure feature parquets exist and contain columns required by train.py."""
+"""Ensure feature parquets exist and contain columns required by train.py.
+
+Rebuild triggers (--fix):
+  - missing parquet file or required column
+  - parquet fingerprint mismatch (column list / PARQUET_FEATURE_SCHEMA_VERSION)
+  - build_features.py or features_v2.py newer than the parquet
+
+Does NOT rebuild for train.py / training_odds.py edits or derived model inputs.
+"""
 
 from __future__ import annotations
 
@@ -15,20 +23,24 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from train import (  # noqa: E402
-    FEATURE_SCHEMA_VERSION,
+    PARQUET_FEATURE_SCHEMA_VERSION,
     feature_columns_for_version,
-    feature_schema_fingerprint,
+    parquet_schema_is_stale,
 )
 from utils import (  # noqa: E402
-    RAW_DIR,
     batter_features_path,
+    feature_parquet_needs_refresh,
     normalize_version,
     pitcher_features_path,
+    statcast_needs_refresh,
+    statcast_raw_path,
 )
 
+# Only files that change build_features.py output. train.py / training_odds.py
+# affect training/inference logic and derived columns, not parquet contents.
 SOURCE_FILES = {
-    "train.py": ROOT / "train.py",
     "build_features.py": ROOT / "build_features.py",
+    "game_lines.py": ROOT / "game_lines.py",
 }
 
 
@@ -40,10 +52,8 @@ class FeatureIssue:
     missing_columns: tuple[str, ...]
     stale_schema: bool = False
     stale_sources: tuple[str, ...] = ()
+    stale_data: bool = False
 
-
-def statcast_raw_path(start_date: str, end_date: str) -> Path:
-    return RAW_DIR / f"statcast_{start_date}_{end_date}.parquet"
 
 
 def source_files_for_version(version: str) -> dict[str, Path]:
@@ -125,7 +135,6 @@ def check_range(
 ) -> list[FeatureIssue]:
     version = normalize_version(version)
     feature_sets = feature_columns_for_version(version)
-    expected_fingerprint = feature_schema_fingerprint(version)
     issues: list[FeatureIssue] = []
 
     for role, columns in (
@@ -152,10 +161,14 @@ def check_range(
 
         cols_missing = missing_columns(path, columns)
         stored_fingerprint = parquet_fingerprint(path)
-        stale_schema = stored_fingerprint != expected_fingerprint
+        stale_schema = parquet_schema_is_stale(
+            stored_fingerprint,
+            version,
+        )
         stale_sources = stale_by_source_mtime(path, version)
+        stale_data = feature_parquet_needs_refresh(path, end_date)
 
-        if cols_missing or stale_schema or stale_sources:
+        if cols_missing or stale_schema or stale_sources or stale_data:
             issues.append(
                 FeatureIssue(
                     role=role,
@@ -164,6 +177,7 @@ def check_range(
                     missing_columns=tuple(cols_missing),
                     stale_schema=stale_schema,
                     stale_sources=stale_sources,
+                    stale_data=stale_data,
                 )
             )
 
@@ -186,13 +200,19 @@ def describe_issue(issue: FeatureIssue) -> str:
 
     if issue.stale_schema:
         details.append(
-            "schema fingerprint mismatch "
-            f"(expected {FEATURE_SCHEMA_VERSION})"
+            "parquet schema fingerprint mismatch "
+            f"(expected {PARQUET_FEATURE_SCHEMA_VERSION})"
         )
 
     if issue.stale_sources:
         details.append(
             ", ".join(issue.stale_sources)
+        )
+
+    if issue.stale_data:
+        details.append(
+            "feature data stops before requested end date "
+            "(Statcast may be incomplete — re-fetch and rebuild)"
         )
 
     return f"{issue.role}: " + "; ".join(details)
@@ -220,6 +240,7 @@ def print_rebuild_notice(
 
     missing_summaries: set[str] = set()
     stale_schema = False
+    stale_data = False
     stale_sources: set[str] = set()
 
     for issue in issues:
@@ -233,6 +254,9 @@ def print_rebuild_notice(
         if issue.stale_schema:
             stale_schema = True
 
+        if issue.stale_data:
+            stale_data = True
+
         stale_sources.update(issue.stale_sources)
 
     if missing_summaries:
@@ -240,10 +264,15 @@ def print_rebuild_notice(
         print(
             f"New model features detected ({joined}), rebuilding..."
         )
+    elif stale_data:
+        print(
+            "Feature data is behind the requested end date "
+            "(Statcast incomplete or early-morning fetch), rebuilding..."
+        )
     elif stale_schema:
         print(
-            "Feature schema changed since last build "
-            f"(schema {FEATURE_SCHEMA_VERSION}), rebuilding..."
+            "Parquet feature columns changed since last build "
+            f"(schema {PARQUET_FEATURE_SCHEMA_VERSION}), rebuilding..."
         )
     elif stale_sources:
         joined = ", ".join(sorted(stale_sources))
@@ -285,7 +314,14 @@ def fix_range(
 
     raw_path = statcast_raw_path(start_date, end_date)
 
-    if not raw_path.exists():
+    if statcast_needs_refresh(start_date, end_date):
+        if raw_path.exists():
+            print(
+                f">>> Statcast raw stale (missing games through "
+                f"{end_date}), re-fetching: {raw_path}"
+            )
+            raw_path.unlink()
+
         print(
             f">>> Fetching Statcast ({start_date} → {end_date})..."
         )
@@ -300,7 +336,7 @@ def fix_range(
             ]
         )
     else:
-        print(f">>> Statcast raw already exists: {raw_path}")
+        print(f">>> Statcast raw already current: {raw_path}")
 
     print(
         f">>> Building {version} features "

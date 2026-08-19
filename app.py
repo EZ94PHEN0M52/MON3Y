@@ -2,8 +2,10 @@ import pandas as pd
 import streamlit as st
 
 from ui.board import render_board
+from ui.pick_builder import render_sidebar_pick_builder
 from ui.player import render_player_page
 from ui.top_lists import render_top_over_page, render_top_under_page
+from batter_score_data import enrich_with_batter_score
 from ui.formatting import enrich_with_over_under_probs
 from ui.player_stats import enrich_with_l5_l10_pct
 from utils import predictions_path
@@ -44,8 +46,14 @@ version = st.sidebar.selectbox(
     help="V2 adds opponent, handedness, and park features.",
 )
 
-df = enrich_with_l5_l10_pct(
-    enrich_with_over_under_probs(load_predictions(version)),
+st.sidebar.divider()
+render_sidebar_pick_builder()
+
+df = enrich_with_batter_score(
+    enrich_with_l5_l10_pct(
+        enrich_with_over_under_probs(load_predictions(version)),
+        version,
+    ),
     version,
 )
 player = st.query_params.get("player")

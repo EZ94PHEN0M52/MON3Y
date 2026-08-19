@@ -1,92 +1,35 @@
 import argparse
 
-import joblib
-import numpy as np
 import pandas as pd
 
+from game_lines import (
+    build_consensus_game_lines,
+    enrich_feature_row_with_game_lines,
+    load_current_game_lines,
+)
+from training_odds import attach_consensus_to_props
+from odds_aggregation import dedupe_best_prop, enrich_predictions
+from odds_movement import compute_movement_features
+from odds_snapshots import snapshots_dir
+from prop_scoring import (
+    MODEL_MAP,
+    fuzzy_player_match,
+    load_model,
+    score_prop,
+)
+from distributional import (
+    load_distributional_model,
+    market_supports_distributional,
+    score_distributional_prop,
+)
 from utils import (
     batter_features_path,
     pitcher_features_path,
     predictions_path,
+    predictions_best_path,
     normalize_version,
-    version_models_dir,
-    american_to_implied_probability,
-    expected_value
 )
 
-
-# =========================================================
-# MARKET → MODEL
-# =========================================================
-
-MODEL_MAP = {
-
-    "batter_hits":
-        "batter_hits.pkl",
-
-    "batter_home_runs":
-        "batter_home_runs.pkl",
-
-    "batter_total_bases":
-        "batter_total_bases.pkl",
-
-    "batter_rbis":
-        "batter_rbi.pkl",
-
-    "batter_runs_scored":
-        "batter_runs.pkl",
-
-    "batter_walks":
-        "batter_walks.pkl",
-
-    "batter_hits_runs_rbis":
-        "batter_hits_runs_rbis.pkl",
-
-    "pitcher_strikeouts":
-        "pitcher_strikeouts.pkl",
-
-    "pitcher_walks":
-        "pitcher_walks.pkl",
-
-    "pitcher_hits_allowed":
-        "pitcher_hits_allowed.pkl",
-
-    "pitcher_outs":
-        "pitcher_outs.pkl",
-
-    "pitcher_earned_runs":
-        "pitcher_earned_runs.pkl"
-}
-
-
-# =========================================================
-# LOAD MODELS
-# =========================================================
-
-def load_model(
-    filename,
-    version="v2"
-):
-
-    path = (
-        version_models_dir(
-            version
-        ) /
-        filename
-    )
-
-    if not path.exists():
-
-        return None
-
-    return joblib.load(
-        path
-    )
-
-
-# =========================================================
-# PREPARE CURRENT BOARD
-# =========================================================
 
 def prepare_board(
     start_date,
@@ -155,62 +98,6 @@ def prepare_board(
     )
 
 
-# =========================================================
-# MATCH PLAYER
-# =========================================================
-
-def fuzzy_player_match(
-    player_name,
-    candidates
-):
-
-    if not isinstance(
-        player_name,
-        str
-    ):
-
-        return None
-
-    name = (
-        player_name
-        .lower()
-        .strip()
-    )
-
-    exact = candidates[
-        candidates
-        .str.lower()
-        .str.strip()
-        .eq(name)
-    ]
-
-    if len(exact) > 0:
-
-        return exact.iloc[0]
-
-    # Basic last-name fallback.
-    last_name = name.split()[-1]
-
-    matches = candidates[
-        candidates
-        .str.lower()
-        .str.contains(
-            last_name,
-            na=False
-        )
-    ]
-
-    if len(matches) > 0:
-
-        return matches.iloc[0]
-
-    return None
-
-
-# =========================================================
-# PREDICT
-# =========================================================
-
 def generate_predictions(
     start_date,
     end_date,
@@ -229,6 +116,18 @@ def generate_predictions(
         start_date,
         end_date,
         version
+    )
+
+    props = attach_consensus_to_props(props)
+
+    props = compute_movement_features(
+        props,
+        snapshots_dir(),
+    )
+
+    game_lines = load_current_game_lines()
+    game_line_consensus = build_consensus_game_lines(
+        game_lines
     )
 
     predictions = []
@@ -318,75 +217,48 @@ def generate_predictions(
                 == match
             ].iloc[0]
 
-        # -------------------------------------------------
-        # Build features
-        # -------------------------------------------------
+        row = enrich_feature_row_with_game_lines(
+            row,
+            prop,
+            game_line_consensus,
+        )
 
-        features = package[
-            "features"
-        ]
+        scores = score_prop(
+            prop,
+            row,
+            package,
+            version=version,
+        )
 
-        values = {}
-
-        for feature in features:
-
-            values[
-                feature
-            ] = row.get(
-                feature,
-                np.nan
+        if market_supports_distributional(
+            market
+        ):
+            dist_package = load_distributional_model(
+                market,
+                version,
             )
 
-        values["line"] = prop[
-            "line"
-        ]
-
-        X = pd.DataFrame(
-            [values]
-        )
-
-        X = X.replace(
-            [
-                np.inf,
-                -np.inf
-            ],
-            np.nan
-        )
-
-        X = X.fillna(0)
-
-        proba = package["model"].predict_proba(X)[0]
-        over_probability = float(proba[1])
-        under_probability = float(proba[0])
-
-        side = str(prop["side"]).strip().lower()
-        model_probability = (
-            over_probability
-            if side == "over"
-            else under_probability
-        )
-
-        # -------------------------------------------------
-        # Market probability
-        # -------------------------------------------------
-
-        market_probability = (
-            american_to_implied_probability(
-                prop["odds"]
-            )
-        )
-
-        edge = (
-            model_probability -
-            market_probability
-        )
-
-        ev = expected_value(
-            model_probability,
-            prop["odds"]
-        )
+            if dist_package is not None:
+                dist_scores = score_distributional_prop(
+                    prop,
+                    row,
+                    dist_package,
+                )
+                scores[
+                    "dist_over_probability"
+                ] = dist_scores[
+                    "over_probability"
+                ]
+                scores[
+                    "predicted_rate"
+                ] = dist_scores[
+                    "predicted_rate"
+                ]
 
         predictions.append({
+
+            "event_id":
+                prop.get("event_id"),
 
             "game":
                 f'{prop["away_team"]} @ '
@@ -401,6 +273,9 @@ def generate_predictions(
             "bookmaker":
                 prop["bookmaker"],
 
+            "bookmaker_key":
+                prop.get("bookmaker_key"),
+
             "side":
                 prop["side"],
 
@@ -410,26 +285,25 @@ def generate_predictions(
             "odds":
                 prop["odds"],
 
-            "over_probability":
-                over_probability,
-
-            "under_probability":
-                under_probability,
-
-            "model_probability":
-                model_probability,
-
-            "market_probability":
-                market_probability,
-
-            "edge":
-                edge,
-
-            "ev":
-                ev,
-
             "commence_time":
-                prop["commence_time"]
+                prop["commence_time"],
+
+            "opening_line":
+                prop.get("opening_line"),
+
+            "opening_odds":
+                prop.get("opening_odds"),
+
+            "line_delta":
+                prop.get("line_delta"),
+
+            "odds_delta":
+                prop.get("odds_delta"),
+
+            "steam_flag":
+                prop.get("steam_flag"),
+
+            **scores,
         })
 
     result = pd.DataFrame(
@@ -444,12 +318,14 @@ def generate_predictions(
 
         return result
 
+    result = enrich_predictions(result)
+
     # -----------------------------------------------------
-    # Sort by model edge
+    # Sort by devigged EV (vig-aware ranking)
     # -----------------------------------------------------
 
     result = result.sort_values(
-        "edge",
+        "ev",
         ascending=False
     )
 
@@ -459,6 +335,17 @@ def generate_predictions(
 
     result.to_csv(
         output,
+        index=False
+    )
+
+    best_output = predictions_best_path(
+        version
+    )
+
+    best_rows = dedupe_best_prop(result)
+
+    best_rows.to_csv(
+        best_output,
         index=False
     )
 
@@ -485,9 +372,21 @@ def generate_predictions(
         "over_probability",
         "under_probability",
         "model_probability",
+        "raw_model_probability",
+        "calibrated_probability",
         "market_probability",
+        "devigged_market_prob",
         "edge",
+        "consensus_line",
+        "consensus_edge",
+        "best_book",
+        "best_ev",
         "ev",
+        "is_best_price",
+        "opening_line",
+        "line_delta",
+        "odds_delta",
+        "steam_flag",
     ]
 
     print(
@@ -504,6 +403,11 @@ def generate_predictions(
     print(
         "Saved:",
         output
+    )
+    print(
+        "Best price rows:",
+        best_output,
+        f"({len(best_rows)} rows)",
     )
 
     return result

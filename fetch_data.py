@@ -1,22 +1,32 @@
 import argparse
-import re
 import sys
 import time
 
 import pandas as pd
-import requests
 
 from pybaseball import (
     statcast,
     cache
 )
 
+from odds_api import (
+    GAME_MARKETS,
+    OddsApiQuotaError,
+    get_event_game_lines,
+    get_event_props,
+    get_events,
+    normalize_event,
+    redact_api_key,
+)
+from odds_snapshots import save_live_snapshot
+from fetch_probables import fetch_and_save_probables
 from utils import (
     RAW_DIR,
     PROCESSED_DIR,
     ODDS_API_KEY,
-    ODDS_API_BASE,
-    MLB_SPORT
+    current_game_lines_path,
+    statcast_needs_refresh,
+    statcast_raw_path,
 )
 
 
@@ -26,7 +36,8 @@ from utils import (
 
 def fetch_statcast(
     start_date,
-    end_date
+    end_date,
+    force=False,
 ):
 
     print()
@@ -34,24 +45,32 @@ def fetch_statcast(
     print("DOWNLOADING STATCAST")
     print("=" * 60)
 
-    output_file = (
-        RAW_DIR /
-        f"statcast_{start_date}_{end_date}.parquet"
-    )
+    output_file = statcast_raw_path(start_date, end_date)
 
-    if output_file.exists():
+    if output_file.exists() and not force:
+        if not statcast_needs_refresh(start_date, end_date):
+            print(
+                "Already exists:"
+            )
+
+            print(
+                output_file
+            )
+
+            return pd.read_parquet(
+                output_file
+            )
 
         print(
-            "Already exists:"
+            "Cached Statcast stops before "
+            f"{end_date}; re-fetching..."
         )
-
+        output_file.unlink()
+    elif output_file.exists() and force:
         print(
-            output_file
+            f"Removing cached Statcast (--force): {output_file}"
         )
-
-        return pd.read_parquet(
-            output_file
-        )
+        output_file.unlink()
 
     print(
         f"Requesting "
@@ -84,235 +103,6 @@ def fetch_statcast(
     )
 
     return df
-
-
-# =========================================================
-# ODDS API
-# =========================================================
-
-PROP_MARKETS = [
-    "batter_hits",
-    "batter_home_runs",
-    "batter_total_bases",
-    "batter_rbis",
-    "batter_runs_scored",
-    "batter_walks",
-    "batter_hits_runs_rbis",
-
-    "pitcher_strikeouts",
-    "pitcher_walks",
-    "pitcher_hits_allowed",
-    "pitcher_outs",
-    "pitcher_earned_runs",
-]
-
-
-class OddsApiQuotaError(Exception):
-    """Odds API quota exhausted or unauthorized."""
-
-
-def redact_api_key(text):
-    if not text:
-        return text
-
-    return re.sub(
-        r"(apiKey=)[^&\s\"']+",
-        r"\1***REDACTED***",
-        str(text),
-        flags=re.IGNORECASE,
-    )
-
-
-def _is_quota_error(status_code, response_text):
-    if status_code == 401:
-        return True
-
-    return "OUT_OF_USAGE_CREDITS" in (response_text or "")
-
-
-def odds_request(
-    url,
-    params
-):
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=30
-    )
-
-    if response.status_code != 200:
-
-        safe_text = redact_api_key(response.text)
-
-        print(
-            response.status_code
-        )
-
-        print(
-            safe_text
-        )
-
-        if _is_quota_error(
-            response.status_code,
-            response.text,
-        ):
-            raise OddsApiQuotaError(
-                "Odds API quota exhausted or "
-                "unauthorized (HTTP "
-                f"{response.status_code})"
-            )
-
-        response.raise_for_status()
-
-    return response.json()
-
-
-# =========================================================
-# GET TODAY'S MLB EVENTS
-# =========================================================
-
-def get_events():
-
-    url = (
-        f"{ODDS_API_BASE}/sports/"
-        f"{MLB_SPORT}/events"
-    )
-
-    params = {
-        "apiKey": ODDS_API_KEY
-    }
-
-    return odds_request(
-        url,
-        params
-    )
-
-
-# =========================================================
-# GET EVENT PROPS
-# =========================================================
-
-def get_event_props(
-    event_id
-):
-
-    url = (
-        f"{ODDS_API_BASE}/sports/"
-        f"{MLB_SPORT}/events/"
-        f"{event_id}/odds"
-    )
-
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "regions": "us",
-        "markets": ",".join(
-            PROP_MARKETS
-        ),
-        "oddsFormat": "american"
-    }
-
-    return odds_request(
-        url,
-        params
-    )
-
-
-# =========================================================
-# NORMALIZE ODDS
-# =========================================================
-
-def normalize_event(
-    event
-):
-
-    rows = []
-
-    for bookmaker in event.get(
-        "bookmakers",
-        []
-    ):
-
-        bookmaker_name = (
-            bookmaker.get("title")
-        )
-
-        bookmaker_key = (
-            bookmaker.get("key")
-        )
-
-        for market in bookmaker.get(
-            "markets",
-            []
-        ):
-
-            market_key = (
-                market.get("key")
-            )
-
-            market_update = (
-                market.get("last_update")
-            )
-
-            for outcome in market.get(
-                "outcomes",
-                []
-            ):
-
-                rows.append({
-
-                    "event_id":
-                        event.get("id"),
-
-                    "commence_time":
-                        event.get(
-                            "commence_time"
-                        ),
-
-                    "home_team":
-                        event.get(
-                            "home_team"
-                        ),
-
-                    "away_team":
-                        event.get(
-                            "away_team"
-                        ),
-
-                    "bookmaker":
-                        bookmaker_name,
-
-                    "bookmaker_key":
-                        bookmaker_key,
-
-                    "market":
-                        market_key,
-
-                    "player":
-                        outcome.get(
-                            "description"
-                        ),
-
-                    "side":
-                        outcome.get(
-                            "name"
-                        ),
-
-                    "line":
-                        outcome.get(
-                            "point"
-                        ),
-
-                    "odds":
-                        outcome.get(
-                            "price"
-                        ),
-
-                    "last_update":
-                        market_update
-                })
-
-    return rows
 
 
 # =========================================================
@@ -514,10 +304,19 @@ def fetch_current_props():
         all_rows
     )
 
+    if "fetched_at" not in df.columns:
+        df["fetched_at"] = pd.NaT
+
+    df["fetched_at"] = df["fetched_at"].fillna(
+        pd.Timestamp.now(tz="UTC").isoformat()
+    )
+
     df.to_parquet(
         output_file,
         index=False
     )
+
+    snapshot_path = save_live_snapshot(df)
 
     print()
     print(
@@ -528,6 +327,160 @@ def fetch_current_props():
     print(
         "Saved:",
         output_file
+    )
+
+    if snapshot_path is not None:
+        print(
+            "Snapshot:",
+            snapshot_path,
+        )
+
+    return df
+
+
+# =========================================================
+# COLLECT CURRENT GAME LINES (TOTALS / SPREADS)
+# =========================================================
+
+def fetch_current_game_lines():
+
+    if not ODDS_API_KEY:
+
+        raise RuntimeError(
+            "ODDS_API_KEY is missing "
+            "from .env"
+        )
+
+    print()
+    print("=" * 60)
+    print("DOWNLOADING CURRENT MLB GAME LINES")
+    print("=" * 60)
+
+    output_file = current_game_lines_path()
+
+    try:
+        events = get_events()
+    except OddsApiQuotaError as exc:
+        print(f"ERROR: {exc}")
+        print(
+            "Could not list MLB events — "
+            "Odds API quota exhausted."
+        )
+        if output_file.exists():
+            print(
+                f"Keeping cached game lines at: {output_file}"
+            )
+            return pd.read_parquet(output_file)
+        sys.exit(1)
+
+    print(
+        f"Found {len(events)} MLB events."
+    )
+
+    all_rows = []
+    quota_exhausted = False
+
+    for index, event in enumerate(
+        events,
+        start=1,
+    ):
+
+        print(
+            f"[{index}/{len(events)}] "
+            f"{event.get('away_team')} "
+            f"@ "
+            f"{event.get('home_team')}"
+        )
+
+        try:
+
+            event_data = (
+                get_event_game_lines(
+                    event["id"]
+                )
+            )
+
+            rows = normalize_event(
+                event_data
+            )
+
+            all_rows.extend(
+                rows
+            )
+
+            time.sleep(0.1)
+
+        except OddsApiQuotaError as exc:
+            quota_exhausted = True
+            print("ERROR:", exc)
+            print(
+                "Stopping early — Odds API "
+                "quota exhausted."
+            )
+            break
+
+        except Exception as exc:
+
+            print(
+                "ERROR:",
+                redact_api_key(exc),
+            )
+
+    if len(all_rows) == 0:
+
+        if output_file.exists():
+            try:
+                cached = pd.read_parquet(
+                    output_file
+                )
+                if len(cached) > 0:
+                    print()
+                    print(
+                        "WARNING: Collected 0 "
+                        "game line rows. "
+                        "NOT overwriting cache."
+                    )
+                    print(output_file)
+                    return cached
+            except Exception:
+                pass
+
+        if quota_exhausted:
+            print(
+                "ERROR: Odds API quota exhausted."
+            )
+        else:
+            print(
+                "ERROR: No game line rows collected."
+            )
+
+        sys.exit(1)
+
+    df = pd.DataFrame(
+        all_rows
+    )
+
+    if "fetched_at" not in df.columns:
+        df["fetched_at"] = pd.NaT
+
+    df["fetched_at"] = df["fetched_at"].fillna(
+        pd.Timestamp.now(tz="UTC").isoformat()
+    )
+
+    df.to_parquet(
+        output_file,
+        index=False,
+    )
+
+    print()
+    print(
+        f"Collected "
+        f"{len(df):,} game line rows"
+    )
+
+    print(
+        "Saved:",
+        output_file,
     )
 
     return df
@@ -557,8 +510,35 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Re-download Statcast even when a cached parquet exists "
+            "(also used when cached data stops before --end)"
+        ),
+    )
+
+    parser.add_argument(
         "--props",
         action="store_true"
+    )
+
+    parser.add_argument(
+        "--game-lines",
+        action="store_true",
+        help=(
+            "Fetch game totals and run lines "
+            "(totals, spreads) for today's slate"
+        ),
+    )
+
+    parser.add_argument(
+        "--probables",
+        action="store_true",
+        help=(
+            "Fetch probable starting pitchers for today's slate "
+            "→ daily_probables.parquet"
+        ),
     )
 
     args = parser.parse_args()
@@ -574,9 +554,18 @@ if __name__ == "__main__":
 
         fetch_statcast(
             args.start,
-            args.end
+            args.end,
+            force=args.force,
         )
 
     if args.props:
 
         fetch_current_props()
+
+    if args.game_lines:
+
+        fetch_current_game_lines()
+
+    if args.probables:
+
+        fetch_and_save_probables()

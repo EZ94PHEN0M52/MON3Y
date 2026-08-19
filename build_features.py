@@ -461,13 +461,58 @@ def build_batter_games(
         data["home_team"]
     ).astype(int)
 
+    data["home_team"] = data["home_team"]
+    data["away_team"] = data["away_team"]
+
+    # -----------------------------------------------------
+    # Stolen bases (runner on steal events)
+    # -----------------------------------------------------
+
+    sb_mask = (
+        data["events"]
+        .astype(str)
+        .str.startswith("stolen_base")
+    )
+
+    sb_rows = data[
+        sb_mask
+    ].copy()
+
+    if "runner" in sb_rows.columns:
+        sb_rows = sb_rows[
+            sb_rows["runner"].notna()
+        ]
+        sb_group_col = "runner"
+    else:
+        sb_group_col = "batter"
+
+    stolen_by_runner = (
+
+        sb_rows
+        .groupby(
+            [
+                "game_date",
+                "game_pk",
+                sb_group_col,
+            ],
+            as_index=False,
+        )
+        .size()
+        .rename(
+            columns={
+                sb_group_col: "batter",
+                "size": "stolen_bases",
+            }
+        )
+    )
+
     # -----------------------------------------------------
     # Aggregate
     # -----------------------------------------------------
 
     result = (
 
-        data.groupby(
+        data        .groupby(
             [
                 "game_date",
                 "game_pk",
@@ -475,7 +520,9 @@ def build_batter_games(
                 "player_name",
                 "team",
                 "opponent",
-                "is_home"
+                "is_home",
+                "home_team",
+                "away_team",
             ],
             as_index=False
         )
@@ -534,6 +581,22 @@ def build_batter_games(
         result["hits"] +
         result["runs"] +
         result["rbi"]
+    )
+
+    result = result.merge(
+        stolen_by_runner,
+        on=[
+            "game_date",
+            "game_pk",
+            "batter",
+        ],
+        how="left",
+    )
+
+    result["stolen_bases"] = (
+        result["stolen_bases"]
+        .fillna(0)
+        .astype(int)
     )
 
     return result
@@ -708,6 +771,9 @@ def build_pitcher_games(
         data["home_team"]
     ).astype(int)
 
+    data["home_team"] = data["home_team"]
+    data["away_team"] = data["away_team"]
+
     data["player_name"] = (
         data["player_name"]
         .map(normalize_player_name)
@@ -719,7 +785,7 @@ def build_pitcher_games(
 
     result = (
 
-        data.groupby(
+        data        .groupby(
             [
                 "game_date",
                 "game_pk",
@@ -727,7 +793,9 @@ def build_pitcher_games(
                 "player_name",
                 "team",
                 "opponent",
-                "is_home"
+                "is_home",
+                "home_team",
+                "away_team",
             ],
             as_index=False
         )
@@ -906,6 +974,7 @@ def build_all_features(
         "runs",
         "walks",
         "hits_runs_rbis",
+        "stolen_bases",
     ]
 
     for stat in batter_stats:
@@ -1080,7 +1149,9 @@ if __name__ == "__main__":
 
         batters, pitchers = (
             build_all_features_v2(
-                raw
+                raw,
+                start_date=args.start,
+                end_date=args.end,
             )
         )
 

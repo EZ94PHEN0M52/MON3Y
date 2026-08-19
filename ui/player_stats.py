@@ -1,5 +1,6 @@
 """Load per-game stat history and rolling over-rates for the UI."""
 
+from pathlib import Path
 from functools import lru_cache
 
 import numpy as np
@@ -15,6 +16,7 @@ MARKET_STAT_MAP = {
     "batter_runs_scored": ("batter", "runs"),
     "batter_walks": ("batter", "walks"),
     "batter_hits_runs_rbis": ("batter", "hits_runs_rbis"),
+    "batter_stolen_bases": ("batter", "stolen_bases"),
     "pitcher_strikeouts": ("pitcher", "strikeouts"),
     "pitcher_walks": ("pitcher", "walks"),
     "pitcher_hits_allowed": ("pitcher", "hits_allowed"),
@@ -63,8 +65,14 @@ def _filename_end_date(path):
     return path.stem.rsplit("_", 1)[-1]
 
 
+def _feature_cache_key(path):
+    resolved = Path(path)
+    return (str(resolved), resolved.stat().st_mtime_ns)
+
+
 @lru_cache(maxsize=8)
-def _load_features(path_str):
+def _load_features(path_key):
+    path_str, _mtime = path_key
     return pd.read_parquet(path_str)
 
 
@@ -81,7 +89,7 @@ def get_last_n_games(player_name, market, version="v2", n=10):
     if path is None:
         return None
 
-    features = _load_features(str(path))
+    features = _load_features(_feature_cache_key(path))
     if "player_name" not in features.columns or stat_col not in features.columns:
         return None
 
@@ -111,6 +119,58 @@ def get_last_n_games(player_name, market, version="v2", n=10):
     chart = recent.set_index("game_label")[[stat_col]]
     chart.columns = [stat_col]
     return chart
+
+
+def infer_player_kind(markets) -> str:
+    """Return 'pitcher' or 'batter' from the player's prop markets."""
+    market_set = set(markets)
+    has_pitcher = bool(market_set & PITCHER_MARKETS)
+    has_batter = bool(market_set & BATTER_MARKETS)
+
+    if has_pitcher and not has_batter:
+        return "pitcher"
+
+    return "batter"
+
+
+def markets_for_kind(kind: str):
+    if kind == "pitcher":
+        return sorted(PITCHER_MARKETS)
+    return sorted(BATTER_MARKETS)
+
+
+def window_average(game_log, stat_col, window):
+    if game_log is None or game_log.empty:
+        return np.nan
+
+    values = pd.to_numeric(
+        game_log[stat_col],
+        errors="coerce",
+    ).dropna()
+
+    if values.empty:
+        return np.nan
+
+    recent = values.tail(window)
+    if recent.empty:
+        return np.nan
+
+    return float(recent.mean())
+
+
+def get_stat_history(
+    player_name,
+    market,
+    version="v2",
+    n=10,
+):
+    """Last *n* games for any supported market (alias for get_last_n_games)."""
+    return get_last_n_games(
+        player_name,
+        market,
+        version=version,
+        n=n,
+    )
 
 
 def _player_key(name):
@@ -179,14 +239,40 @@ def _build_player_game_cache(features):
     return cache
 
 
-@lru_cache(maxsize=4)
-def _kind_player_game_cache(kind, version):
+def _kind_player_cache_key(kind, version):
     path = find_latest_feature_path(kind, version)
     if path is None:
+        return (kind, version, None, 0)
+
+    path_str, mtime = _feature_cache_key(path)
+    return (kind, version, path_str, mtime)
+
+
+@lru_cache(maxsize=4)
+def _kind_player_game_cache(cache_key):
+    _kind, _version, path_str, mtime = cache_key
+    if path_str is None:
         return {}
 
-    features = _load_features(str(path))
+    features = _load_features((path_str, mtime))
     return _build_player_game_cache(features)
+
+
+def get_features_max_game_date(kind="batter", version="v2"):
+    """Return YYYY-MM-DD for the latest game_date in the feature parquet."""
+    path = find_latest_feature_path(kind, version)
+    if path is None:
+        return None
+
+    features = _load_features(_feature_cache_key(path))
+    if features.empty or "game_date" not in features.columns:
+        return None
+
+    return (
+        pd.to_datetime(features["game_date"])
+        .max()
+        .strftime("%Y-%m-%d")
+    )
 
 
 def rolling_over_rates(player_name, market, line, version="v2"):
@@ -197,7 +283,7 @@ def rolling_over_rates(player_name, market, line, version="v2"):
         return np.nan, np.nan
 
     kind, stat_col = MARKET_STAT_MAP[market]
-    cache = _kind_player_game_cache(kind, version)
+    cache = _kind_player_game_cache(_kind_player_cache_key(kind, version))
     if not cache:
         return np.nan, np.nan
 

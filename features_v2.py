@@ -12,6 +12,11 @@ from build_features import (
     add_rolling_features,
     build_all_features,
 )
+from game_lines import (
+    GAME_LINE_FEATURES,
+    load_historical_game_lines,
+    merge_game_lines_into_features,
+)
 
 
 STRIKEOUT_EVENTS = {
@@ -484,7 +489,9 @@ def _home_offense_daily(
 
 
 def build_all_features_v2(
-    statcast_df
+    statcast_df,
+    start_date=None,
+    end_date=None,
 ):
 
     batters, pitchers = build_all_features(
@@ -630,6 +637,43 @@ def build_all_features_v2(
         how="left"
     )
 
+    if start_date is None:
+        start_date = (
+            pd.to_datetime(
+                statcast_df["game_date"]
+            )
+            .min()
+            .strftime("%Y-%m-%d")
+        )
+
+    if end_date is None:
+        end_date = (
+            pd.to_datetime(
+                statcast_df["game_date"]
+            )
+            .max()
+            .strftime("%Y-%m-%d")
+        )
+
+    print(
+        "Merging game line context features..."
+    )
+
+    game_lines = load_historical_game_lines(
+        start_date,
+        end_date,
+    )
+
+    batters = merge_game_lines_into_features(
+        batters,
+        game_lines,
+    )
+
+    pitchers = merge_game_lines_into_features(
+        pitchers,
+        game_lines,
+    )
+
     return batters, pitchers
 
 
@@ -643,6 +687,7 @@ BATTER_FEATURES_V2_EXTRA = [
     "hits_vs_rhp_season",
     "park_home_hits_season",
     "park_home_tb_season",
+    *GAME_LINE_FEATURES,
 ]
 
 
@@ -654,4 +699,5 @@ PITCHER_FEATURES_V2_EXTRA = [
     "opp_team_runs_season",
     "opp_team_batter_k_rate_season",
     "pitcher_throws_L",
+    *GAME_LINE_FEATURES,
 ]
