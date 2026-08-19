@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 from pathlib import Path
 
 import joblib
@@ -54,6 +55,23 @@ BATTER_MARKETS = {
         0.5,
         1.5,
         2.5
+    ],
+
+    "runs": [
+        0.5,
+        1.5
+    ],
+
+    "walks": [
+        0.5,
+        1.5
+    ],
+
+    "hits_runs_rbis": [
+        0.5,
+        1.5,
+        2.5,
+        3.5
     ]
 }
 
@@ -82,13 +100,39 @@ PITCHER_MARKETS = {
         2.5,
         3.5,
         4.5
+    ],
+
+    "outs": [
+        14.5,
+        15.5,
+        16.5,
+        17.5,
+        18.5,
+        19.5,
+        20.5
+    ],
+
+    "earned_runs": [
+        1.5,
+        2.5,
+        3.5,
+        4.5
     ]
 }
 
 
 # =========================================================
 # MODEL FEATURES
+#
+# BATTER_FEATURES / PITCHER_FEATURES must stay in sync with the
+# stat lists in build_features.py (build_all_features). V2 extras
+# live in features_v2.py. scripts/ensure_features.py reads required
+# columns via feature_columns_for_version() below — bump
+# FEATURE_SCHEMA_VERSION when adding or renaming model inputs.
 # =========================================================
+
+# Bump when feature column lists or build logic change materially.
+FEATURE_SCHEMA_VERSION = "2"
 
 BATTER_FEATURES = [
     "hits_l3",
@@ -112,6 +156,21 @@ BATTER_FEATURES = [
     "rbi_l10",
     "rbi_season",
 
+    "runs_l3",
+    "runs_l5",
+    "runs_l10",
+    "runs_season",
+
+    "walks_l3",
+    "walks_l5",
+    "walks_l10",
+    "walks_season",
+
+    "hits_runs_rbis_l3",
+    "hits_runs_rbis_l5",
+    "hits_runs_rbis_l10",
+    "hits_runs_rbis_season",
+
     "plate_appearances",
 
     "is_home"
@@ -134,6 +193,16 @@ PITCHER_FEATURES = [
     "hits_allowed_l5",
     "hits_allowed_l10",
     "hits_allowed_season",
+
+    "outs_l3",
+    "outs_l5",
+    "outs_l10",
+    "outs_season",
+
+    "earned_runs_l3",
+    "earned_runs_l5",
+    "earned_runs_l10",
+    "earned_runs_season",
 
     "is_home"
 ]
@@ -170,6 +239,61 @@ def feature_columns_for_version(
         "batter": BATTER_FEATURES_V2,
         "pitcher": PITCHER_FEATURES_V2,
     }
+
+
+def feature_schema_fingerprint(
+    version,
+):
+
+    version = normalize_version(
+        version
+    )
+
+    feature_sets = feature_columns_for_version(
+        version
+    )
+
+    payload = (
+        f"{FEATURE_SCHEMA_VERSION}|{version}|"
+        f"batter:{','.join(feature_sets['batter'])}|"
+        f"pitcher:{','.join(feature_sets['pitcher'])}"
+    )
+
+    return hashlib.sha256(
+        payload.encode()
+    ).hexdigest()[
+        :16
+    ]
+
+
+def validate_feature_columns(
+    df,
+    feature_columns,
+    path,
+    start_date,
+    end_date,
+    version
+):
+
+    missing = [
+        col
+        for col in feature_columns
+        if col not in df.columns
+    ]
+
+    if not missing:
+
+        return
+
+    raise ValueError(
+        "Feature parquet is missing columns required for training: "
+        f"{missing}. "
+        f"Rebuild features with:\n"
+        f"  python build_features.py "
+        f"--start {start_date} --end {end_date} "
+        f"--version {version}\n"
+        f"File: {path}"
+    )
 
 
 # =========================================================
@@ -534,6 +658,24 @@ def main():
 
     pitchers = pd.read_parquet(
         pitcher_path
+    )
+
+    validate_feature_columns(
+        batters,
+        feature_sets["batter"],
+        batter_path,
+        args.start,
+        args.end,
+        version
+    )
+
+    validate_feature_columns(
+        pitchers,
+        feature_sets["pitcher"],
+        pitcher_path,
+        args.start,
+        args.end,
+        version
     )
 
     # -----------------------------------------------------

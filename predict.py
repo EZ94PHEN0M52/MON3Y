@@ -33,6 +33,15 @@ MODEL_MAP = {
     "batter_rbis":
         "batter_rbi.pkl",
 
+    "batter_runs_scored":
+        "batter_runs.pkl",
+
+    "batter_walks":
+        "batter_walks.pkl",
+
+    "batter_hits_runs_rbis":
+        "batter_hits_runs_rbis.pkl",
+
     "pitcher_strikeouts":
         "pitcher_strikeouts.pkl",
 
@@ -40,7 +49,13 @@ MODEL_MAP = {
         "pitcher_walks.pkl",
 
     "pitcher_hits_allowed":
-        "pitcher_hits_allowed.pkl"
+        "pitcher_hits_allowed.pkl",
+
+    "pitcher_outs":
+        "pitcher_outs.pkl",
+
+    "pitcher_earned_runs":
+        "pitcher_earned_runs.pkl"
 }
 
 
@@ -340,9 +355,15 @@ def generate_predictions(
 
         X = X.fillna(0)
 
-        probability = (
-            package["model"]
-            .predict_proba(X)[0][1]
+        proba = package["model"].predict_proba(X)[0]
+        over_probability = float(proba[1])
+        under_probability = float(proba[0])
+
+        side = str(prop["side"]).strip().lower()
+        model_probability = (
+            over_probability
+            if side == "over"
+            else under_probability
         )
 
         # -------------------------------------------------
@@ -356,12 +377,12 @@ def generate_predictions(
         )
 
         edge = (
-            probability -
+            model_probability -
             market_probability
         )
 
         ev = expected_value(
-            probability,
+            model_probability,
             prop["odds"]
         )
 
@@ -389,8 +410,14 @@ def generate_predictions(
             "odds":
                 prop["odds"],
 
+            "over_probability":
+                over_probability,
+
+            "under_probability":
+                under_probability,
+
             "model_probability":
-                probability,
+                model_probability,
 
             "market_probability":
                 market_probability,
@@ -455,10 +482,12 @@ def generate_predictions(
         "side",
         "line",
         "odds",
+        "over_probability",
+        "under_probability",
         "model_probability",
         "market_probability",
         "edge",
-        "ev"
+        "ev",
     ]
 
     print(

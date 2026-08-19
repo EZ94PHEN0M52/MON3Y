@@ -47,6 +47,10 @@ def _team_pitching_daily(
                 "hits_allowed",
                 "sum"
             ),
+            team_earned_runs=(
+                "earned_runs",
+                "sum"
+            ),
             team_starts=(
                 "game_pk",
                 "nunique"
@@ -84,6 +88,10 @@ def _team_batting_daily(
             ),
             team_rbi=(
                 "rbi",
+                "sum"
+            ),
+            team_runs=(
+                "runs",
                 "sum"
             ),
             team_plate_appearances=(
@@ -495,7 +503,8 @@ def build_all_features_v2(
         [
             "team_strikeouts",
             "team_walks",
-            "team_hits_allowed"
+            "team_hits_allowed",
+            "team_earned_runs",
         ]
     )
 
@@ -508,7 +517,8 @@ def build_all_features_v2(
             "team_hits",
             "team_total_bases",
             "team_home_runs",
-            "team_rbi"
+            "team_rbi",
+            "team_runs",
         ]
     )
 
@@ -627,6 +637,7 @@ BATTER_FEATURES_V2_EXTRA = [
     "opp_team_strikeouts_season",
     "opp_team_walks_season",
     "opp_team_hits_allowed_season",
+    "opp_team_earned_runs_season",
     "batter_stand_L",
     "hits_vs_lhp_season",
     "hits_vs_rhp_season",
@@ -640,6 +651,7 @@ PITCHER_FEATURES_V2_EXTRA = [
     "opp_team_total_bases_season",
     "opp_team_home_runs_season",
     "opp_team_rbi_season",
+    "opp_team_runs_season",
     "opp_team_batter_k_rate_season",
     "pitcher_throws_L",
 ]

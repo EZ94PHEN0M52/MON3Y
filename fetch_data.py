@@ -1,4 +1,6 @@
 import argparse
+import re
+import sys
 import time
 
 import pandas as pd
@@ -94,11 +96,38 @@ PROP_MARKETS = [
     "batter_total_bases",
     "batter_rbis",
     "batter_runs_scored",
+    "batter_walks",
+    "batter_hits_runs_rbis",
 
     "pitcher_strikeouts",
     "pitcher_walks",
     "pitcher_hits_allowed",
+    "pitcher_outs",
+    "pitcher_earned_runs",
 ]
+
+
+class OddsApiQuotaError(Exception):
+    """Odds API quota exhausted or unauthorized."""
+
+
+def redact_api_key(text):
+    if not text:
+        return text
+
+    return re.sub(
+        r"(apiKey=)[^&\s\"']+",
+        r"\1***REDACTED***",
+        str(text),
+        flags=re.IGNORECASE,
+    )
+
+
+def _is_quota_error(status_code, response_text):
+    if status_code == 401:
+        return True
+
+    return "OUT_OF_USAGE_CREDITS" in (response_text or "")
 
 
 def odds_request(
@@ -114,15 +143,27 @@ def odds_request(
 
     if response.status_code != 200:
 
+        safe_text = redact_api_key(response.text)
+
         print(
             response.status_code
         )
 
         print(
-            response.text
+            safe_text
         )
 
-    response.raise_for_status()
+        if _is_quota_error(
+            response.status_code,
+            response.text,
+        ):
+            raise OddsApiQuotaError(
+                "Odds API quota exhausted or "
+                "unauthorized (HTTP "
+                f"{response.status_code})"
+            )
+
+        response.raise_for_status()
 
     return response.json()
 
@@ -278,6 +319,42 @@ def normalize_event(
 # COLLECT ALL CURRENT PROPS
 # =========================================================
 
+def _exit_props_fetch_failure(
+    message,
+    output_file=None,
+):
+    print()
+    print(message)
+
+    if (
+        output_file is not None
+        and output_file.exists()
+    ):
+        try:
+            cached = pd.read_parquet(
+                output_file
+            )
+            if len(cached) > 0:
+                print()
+                print(
+                    "WARNING: Keeping existing "
+                    f"cached props "
+                    f"({len(cached):,} rows) at:"
+                )
+                print(output_file)
+                print()
+                print(
+                    "Re-run predictions with "
+                    "cached props, or skip "
+                    "fetch with "
+                    "./run_daily.sh --skip-props"
+                )
+        except Exception:
+            pass
+
+    sys.exit(1)
+
+
 def fetch_current_props():
 
     if not ODDS_API_KEY:
@@ -292,13 +369,28 @@ def fetch_current_props():
     print("DOWNLOADING CURRENT MLB PROPS")
     print("=" * 60)
 
-    events = get_events()
+    output_file = (
+        PROCESSED_DIR /
+        "current_props.parquet"
+    )
+
+    try:
+        events = get_events()
+    except OddsApiQuotaError as exc:
+        _exit_props_fetch_failure(
+            f"ERROR: {exc}\n"
+            "Could not list MLB events — "
+            "Odds API quota exhausted.",
+            output_file,
+        )
 
     print(
         f"Found {len(events)} MLB events."
     )
 
     all_rows = []
+    events_failed = 0
+    quota_exhausted = False
 
     for index, event in enumerate(
         events,
@@ -331,20 +423,95 @@ def fetch_current_props():
             # Avoid hammering the API.
             time.sleep(0.1)
 
+        except OddsApiQuotaError as exc:
+            quota_exhausted = True
+            print(
+                "ERROR:",
+                exc,
+            )
+            print(
+                "Stopping early — Odds API "
+                "quota exhausted "
+                "(OUT_OF_USAGE_CREDITS)."
+            )
+            break
+
         except Exception as exc:
+
+            events_failed += 1
 
             print(
                 "ERROR:",
-                exc
+                redact_api_key(exc),
             )
+
+    if len(all_rows) == 0:
+
+        all_events_failed = (
+            len(events) > 0
+            and events_failed == len(events)
+        )
+
+        if output_file.exists():
+            try:
+                cached = pd.read_parquet(
+                    output_file
+                )
+                if len(cached) > 0:
+                    print()
+                    print(
+                        "WARNING: Collected 0 "
+                        "prop rows (API quota or "
+                        "fetch errors). "
+                        "NOT overwriting "
+                        "existing cache."
+                    )
+                    print()
+                    print(
+                        f"Using cached props "
+                        f"({len(cached):,} rows) "
+                        f"at:"
+                    )
+                    print(output_file)
+                    print()
+                    print(
+                        "Re-run with "
+                        "./run_daily.sh "
+                        "--skip-props to skip "
+                        "this fetch step."
+                    )
+                    sys.exit(1)
+            except Exception:
+                pass
+
+        if quota_exhausted:
+            reason = (
+                "Odds API quota exhausted "
+                "(OUT_OF_USAGE_CREDITS)."
+            )
+        elif all_events_failed or len(events) == 0:
+            reason = (
+                "Odds API quota exhausted "
+                "(OUT_OF_USAGE_CREDITS)."
+                if events_failed > 0
+                or len(events) == 0
+                else "No prop rows returned "
+                "for today's events."
+            )
+        else:
+            reason = (
+                "No prop rows collected."
+            )
+
+        _exit_props_fetch_failure(
+            f"ERROR: {reason}\n"
+            "No cached current_props.parquet "
+            "available — cannot continue.",
+            output_file=None,
+        )
 
     df = pd.DataFrame(
         all_rows
-    )
-
-    output_file = (
-        PROCESSED_DIR /
-        "current_props.parquet"
     )
 
     df.to_parquet(

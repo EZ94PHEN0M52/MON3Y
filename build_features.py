@@ -2,6 +2,8 @@ import argparse
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pybaseball import playerid_reverse_lookup
 
 from utils import (
@@ -60,6 +62,28 @@ EXTRA_BASES = {
 SCORING_EVENTS = HITS | {
     "sac_fly",
     "sac_fly_double_play",
+}
+
+
+INNING_TAINT_EVENTS = {
+    "field_error",
+    "catcher_interf",
+}
+
+
+# Outs recorded by the pitcher (matches sportsbook "pitcher outs" props).
+PITCHER_OUT_EVENTS = {
+    "strikeout": 1,
+    "field_out": 1,
+    "force_out": 1,
+    "fielders_choice_out": 1,
+    "sac_fly": 1,
+    "sac_bunt": 1,
+    "grounded_into_double_play": 2,
+    "strikeout_double_play": 2,
+    "sac_fly_double_play": 2,
+    "double_play": 2,
+    "triple_play": 3,
 }
 
 
@@ -122,6 +146,115 @@ def normalize_player_name(
         )
 
     return name
+
+
+def derive_scoring_runners(
+    row
+):
+
+    runs = int(
+        row["post_bat_score"] -
+        row["bat_score"]
+    )
+
+    if runs <= 0:
+
+        return []
+
+    event = row["events"]
+
+    if pd.isna(event):
+
+        return []
+
+    batter = int(row["batter"])
+
+    on1 = (
+        int(row["on_1b"])
+        if pd.notna(row["on_1b"])
+        else None
+    )
+
+    on2 = (
+        int(row["on_2b"])
+        if pd.notna(row["on_2b"])
+        else None
+    )
+
+    on3 = (
+        int(row["on_3b"])
+        if pd.notna(row["on_3b"])
+        else None
+    )
+
+    runners = [
+        runner
+        for runner in [
+            on3,
+            on2,
+            on1
+        ]
+        if runner is not None
+    ]
+
+    if event == "home_run":
+
+        return (
+            [batter] +
+            [
+                runner
+                for runner in [
+                    on1,
+                    on2,
+                    on3
+                ]
+                if runner is not None
+            ]
+        )
+
+    if event in {
+        "sac_fly",
+        "sac_fly_double_play"
+    }:
+
+        return (
+            [on3]
+            if on3 is not None
+            else []
+        )
+
+    if (
+        event in {
+            "walk",
+            "intent_walk"
+        }
+        and on1
+        and on2
+        and on3
+    ):
+
+        return [on3]
+
+    if event == "triple":
+
+        return (
+            [batter] +
+            runners
+        )[:runs]
+
+    scored = []
+    remaining = runs
+
+    for runner in runners:
+
+        if remaining <= 0:
+
+            break
+
+        scored.append(runner)
+        remaining -= 1
+
+    return scored
 
 
 def derive_rbi(
@@ -213,6 +346,19 @@ def build_batter_games(
     )
 
     # -----------------------------------------------------
+    # Walks
+    # -----------------------------------------------------
+
+    data["walk"] = (
+        data["events"]
+        .isin([
+            "walk",
+            "intent_walk"
+        ])
+        .astype(int)
+    )
+
+    # -----------------------------------------------------
     # Batter name (Statcast player_name is the pitcher)
     # -----------------------------------------------------
 
@@ -231,18 +377,68 @@ def build_batter_games(
     ].copy()
 
     # -----------------------------------------------------
-    # Runs scored by batter
-    #
-    # We'll use the batter_runs field if available.
+    # Runs scored by batter (from base-state heuristics)
     # -----------------------------------------------------
 
-    if "bat_score" in data.columns:
+    data["runs_scored_on_play"] = (
+        pd.to_numeric(
+            data["post_bat_score"],
+            errors="coerce"
+        )
+        - pd.to_numeric(
+            data["bat_score"],
+            errors="coerce"
+        )
+    ).fillna(0).clip(
+        lower=0
+    )
 
-        data["run_proxy"] = 0
+    data["scoring_runners"] = (
+        data.apply(
+            derive_scoring_runners,
+            axis=1
+        )
+    )
 
-    else:
+    scoring_rows = (
 
-        data["run_proxy"] = 0
+        data[
+            data["scoring_runners"]
+            .map(len)
+            .gt(0)
+        ]
+        .explode(
+            "scoring_runners"
+        )
+        .rename(
+            columns={
+                "scoring_runners":
+                    "run_scorer"
+            }
+        )
+    )
+
+    runs_by_batter = (
+
+        scoring_rows
+        .groupby(
+            [
+                "game_date",
+                "game_pk",
+                "run_scorer"
+            ],
+            as_index=False
+        )
+        .size()
+        .rename(
+            columns={
+                "run_scorer":
+                    "batter",
+                "size":
+                    "runs"
+            }
+        )
+    )
 
     # -----------------------------------------------------
     # Team / opponent
@@ -306,11 +502,38 @@ def build_batter_games(
                 "sum"
             ),
 
+            walks=(
+                "walk",
+                "sum"
+            ),
+
             plate_appearances=(
                 "events",
                 "count"
             )
         )
+    )
+
+    result = result.merge(
+        runs_by_batter,
+        on=[
+            "game_date",
+            "game_pk",
+            "batter"
+        ],
+        how="left"
+    )
+
+    result["runs"] = (
+        result["runs"]
+        .fillna(0)
+        .astype(int)
+    )
+
+    result["hits_runs_rbis"] = (
+        result["hits"] +
+        result["runs"] +
+        result["rbi"]
     )
 
     return result
@@ -364,6 +587,104 @@ def build_pitcher_games(
         data["events"]
         .isin(HITS)
         .astype(int)
+    )
+
+    # -----------------------------------------------------
+    # Outs recorded
+    # -----------------------------------------------------
+
+    data["outs"] = (
+        data["events"]
+        .map(PITCHER_OUT_EVENTS)
+        .fillna(0)
+        .astype(int)
+    )
+
+    # -----------------------------------------------------
+    # Earned runs allowed (approximation from play events)
+    # -----------------------------------------------------
+
+    data["runs_scored_on_play"] = (
+        pd.to_numeric(
+            data["post_bat_score"],
+            errors="coerce"
+        )
+        - pd.to_numeric(
+            data["bat_score"],
+            errors="coerce"
+        )
+    ).fillna(0).clip(
+        lower=0
+    )
+
+    data["half_inning"] = (
+        data["game_pk"].astype(str)
+        + "_"
+        + data["inning"].astype(str)
+        + "_"
+        + data["inning_topbot"].astype(str)
+    )
+
+    earned_parts = []
+
+    for _, half in data.groupby(
+        "half_inning",
+        sort=False
+    ):
+
+        half = half.sort_values(
+            [
+                "at_bat_number",
+                "pitch_number"
+            ]
+        ).copy()
+
+        tainted = False
+
+        earned_runs = []
+
+        for _, row in half.iterrows():
+
+            runs = int(
+                row["runs_scored_on_play"]
+            )
+
+            if runs > 0:
+
+                if (
+                    tainted
+                    or row["events"]
+                    in INNING_TAINT_EVENTS
+                ):
+
+                    earned_runs.append(0)
+
+                else:
+
+                    earned_runs.append(runs)
+
+            else:
+
+                earned_runs.append(0)
+
+            if (
+                row["events"]
+                in INNING_TAINT_EVENTS
+            ):
+
+                tainted = True
+
+        half["earned_runs_on_play"] = (
+            earned_runs
+        )
+
+        earned_parts.append(
+            half
+        )
+
+    data = pd.concat(
+        earned_parts,
+        ignore_index=True
     )
 
     # -----------------------------------------------------
@@ -425,6 +746,16 @@ def build_pitcher_games(
 
             hits_allowed=(
                 "hit_allowed",
+                "sum"
+            ),
+
+            outs=(
+                "outs",
+                "sum"
+            ),
+
+            earned_runs=(
+                "earned_runs_on_play",
                 "sum"
             )
         )
@@ -564,14 +895,17 @@ def build_all_features(
     )
 
     # -----------------------------------------------------
-    # Batter rolling stats
+    # Batter rolling stats (keep in sync with BATTER_FEATURES in train.py)
     # -----------------------------------------------------
 
     batter_stats = [
         "hits",
         "home_runs",
         "total_bases",
-        "rbi"
+        "rbi",
+        "runs",
+        "walks",
+        "hits_runs_rbis",
     ]
 
     for stat in batter_stats:
@@ -589,7 +923,9 @@ def build_all_features(
     pitcher_stats = [
         "strikeouts",
         "walks",
-        "hits_allowed"
+        "hits_allowed",
+        "outs",
+        "earned_runs",
     ]
 
     for stat in pitcher_stats:
@@ -606,6 +942,48 @@ def build_all_features(
 # =========================================================
 # SAVE
 # =========================================================
+
+def write_feature_parquet(
+    df,
+    path,
+    version,
+):
+
+    from train import (
+        FEATURE_SCHEMA_VERSION,
+        feature_schema_fingerprint,
+    )
+
+    fingerprint = feature_schema_fingerprint(
+        version
+    )
+
+    table = pa.Table.from_pandas(
+        df,
+        preserve_index=False,
+    )
+
+    metadata = table.schema.metadata or {}
+    metadata.update(
+        {
+            b"feature_schema_version": (
+                FEATURE_SCHEMA_VERSION.encode()
+            ),
+            b"feature_schema_fingerprint": (
+                fingerprint.encode()
+            ),
+        }
+    )
+
+    table = table.replace_schema_metadata(
+        metadata
+    )
+
+    pq.write_table(
+        table,
+        path,
+    )
+
 
 def save_features(
     batters,
@@ -627,14 +1005,16 @@ def save_features(
         version
     )
 
-    batters.to_parquet(
+    write_feature_parquet(
+        batters,
         batter_path,
-        index=False
+        version,
     )
 
-    pitchers.to_parquet(
+    write_feature_parquet(
+        pitchers,
         pitcher_path,
-        index=False
+        version,
     )
 
     print(
