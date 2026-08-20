@@ -104,6 +104,49 @@ Version compare reads **four prediction CSV files** on disk. Each column maps to
 
 ---
 
+#### Cache-first data & `DISABLE_LIVE_FETCH` (read before Step A)
+
+This project is designed **cache-first**: live APIs are called only during explicit **fetch** steps. Everything else reads files from disk. That keeps Odds API credits and Statcast downloads from being wasted on backtests, Streamlit reruns, or version compare.
+
+**Three layers (simple mental model):**
+
+| Layer | What runs | Hits network? |
+|-------|-----------|---------------|
+| **1. Fetch** | `fetch_data.py`, `fetch_probables.py`, `fetch_historical_odds.py`, and `./run_daily.sh` (steps 1–4) | **Yes** — downloads once, saves to `data/raw/` and `data/processed/` |
+| **2. Disk** | Parquets and CSVs under `data/raw/`, `data/processed/`, `data/predictions/`, `data/backtest/` | N/A — single source of truth |
+| **3. Compute** | `predict.py`, Streamlit, backtests, version compare, Batter Score enrichment | **No** — reads disk + model `.pkl` files only |
+
+**During this quick-start workflow:**
+
+- **Step A (`./run_daily.sh`)** = **online mode** — may fetch Statcast (if features stale), props, game lines, and probables, then runs read-only `predict.py`.
+- **Steps B–D (`predict.py --version v1`, V3 file copy, Streamlit, version compare)** = **offline-friendly** — they only read existing parquets/CSVs. They do **not** call the Odds API or Statcast if data is already on disk.
+- **Streamlit reruns** (clicking filters, opening compare) = **no API** — reads `predictions_*.csv` and cached parquet enrichment.
+
+**`DISABLE_LIVE_FETCH=1`** is a safety switch that **blocks all network calls** if something tries to fetch accidentally (backtests, offline predict, etc.). Implemented in [`utils.py`](utils.py) via `require_live_fetch()`.
+
+| When to leave it **unset** (default) | When to set **`DISABLE_LIVE_FETCH=1`** |
+|--------------------------------------|----------------------------------------|
+| First-time setup, `./run_daily.sh`, manual `fetch_data.py` | Backtests, Batter Score validation, re-running predict against cached props |
+| Refreshing Statcast through `ensure_features.py --fix` | Streamlit / version compare when CSVs already exist |
+| Historical odds backfill | Saving API credits: `./run_daily.sh --skip-props --skip-probables` reuses yesterday’s parquets |
+
+```bash
+# Offline examples (zero API spend — files must already exist on disk)
+DISABLE_LIVE_FETCH=1 python predict.py --start 2026-03-25 --end 2026-08-16 --version v2
+python scripts/backtest_batter_score.py --start 2025-04-01 --end 2025-06-30   # auto-sets the flag
+streamlit run app.py   # no flag needed; never calls APIs on rerun
+
+# Online refresh (uses API credits)
+unset DISABLE_LIVE_FETCH
+./run_daily.sh
+```
+
+If a job fails with `Live fetch blocked … DISABLE_LIVE_FETCH=1 is set`, either unset the variable for a fetch step or ensure the required parquet/CSV already exists from a prior `./run_daily.sh`.
+
+**Full reference:** [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls) (blocked modules, Streamlit `@st.cache_data`, daily skip flags).
+
+---
+
 #### Step A — V2 + Main (daily pipeline)
 
 This is the **main path**. It refreshes today’s lines and writes `predictions_v2.csv`, which powers both the **V2** and **Main** compare columns.
