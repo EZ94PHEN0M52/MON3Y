@@ -7,6 +7,7 @@ from utils import (
     ODDS_API_KEY,
     ODDS_API_BASE,
     MLB_SPORT,
+    require_live_fetch,
 )
 
 
@@ -63,6 +64,7 @@ def odds_request(
     params,
     timeout=30,
 ):
+    require_live_fetch("Odds API request")
     response = requests.get(
         url,
         params=params,

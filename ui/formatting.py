@@ -10,6 +10,7 @@ PROBABILITY_COLUMNS = (
     "calibrated_probability",
     "over_probability",
     "under_probability",
+    "dist_over_probability",
     "market_probability",
     "devigged_market_prob",
     "edge",
@@ -36,6 +37,13 @@ def format_odds(value):
     if odds > 0:
         return f"+{odds}"
     return str(odds)
+
+
+def format_predicted_count(value, decimals=1):
+    """Format Poisson regressor expected count (pitcher K / walks)."""
+    if pd.isna(value):
+        return "—"
+    return f"{float(value):.{decimals}f}"
 
 
 def format_commence_time(value):
@@ -119,6 +127,12 @@ def prepare_display_df(df):
     if "odds" in display.columns:
         display["odds"] = display["odds"].apply(format_odds)
 
+    if "predicted_count" in display.columns:
+        display["predicted_count"] = pd.to_numeric(
+            display["predicted_count"],
+            errors="coerce",
+        ).round(1)
+
     return display
 
 
@@ -134,6 +148,12 @@ def top_list_path(view):
     from urllib.parse import urlencode
 
     return "/?" + urlencode({"view": view})
+
+
+def compare_view_path():
+    from urllib.parse import urlencode
+
+    return "/?" + urlencode({"view": "compare"})
 
 
 def format_batter_score_cell(score, label=""):

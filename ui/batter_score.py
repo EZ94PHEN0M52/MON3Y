@@ -7,6 +7,7 @@ from batter_score import MIN_PA_H2H
 from batter_score_data import (
     build_game_context,
     get_batter_score_game_log,
+    is_batter_score_validated,
     lookup_batter_score,
 )
 from ui.glossary import GLOSSARY
@@ -63,6 +64,10 @@ def render_batter_score_summary(
         st.subheader(
             f"Batter Score: {result.batter_score:.1f}/100{label_suffix}"
         )
+        if is_batter_score_validated():
+            st.caption("✓ Batter Score validated")
+        else:
+            st.caption("Batter Score — validation pending")
     with col_help:
         with st.popover("?"):
             st.markdown(GLOSSARY["batter_score"])

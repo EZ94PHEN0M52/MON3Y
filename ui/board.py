@@ -5,6 +5,7 @@ import streamlit as st
 
 from odds_aggregation import dedupe_best_prop
 from ui.formatting import (
+    compare_view_path,
     format_batter_score_cell,
     format_odds,
     player_path,
@@ -13,8 +14,14 @@ from ui.formatting import (
     top_list_path,
 )
 from ui.glossary import EDGE_CALLOUT, GLOSSARY
+from ui.formatting import market_label
 from ui.market_filters import render_market_multiselect
 from ui.pick_builder import render_board_add_controls
+
+DEFAULT_MIN_EDGE = 0.03
+DEFAULT_MIN_EV = 0.05
+MAX_SORT_COLUMNS = 3
+_SUBSCRIPTS = "₀₁₂₃₄₅₆₇₈₉"
 
 BOARD_TABLE_COLUMNS = [
     "player_link",
@@ -28,6 +35,8 @@ BOARD_TABLE_COLUMNS = [
     "under_probability",
     "model_probability",
     "calibrated_probability",
+    "predicted_count",
+    "dist_over_probability",
     "market_probability",
     "devigged_market_prob",
     "l5_l10_pct",
@@ -82,6 +91,18 @@ BASE_HEADER_SPECS = [
         "field": "calibrated_probability",
         "filter": "min_pct",
         "glossary": "calibrated_pct",
+    },
+    {
+        "label": "Pred #",
+        "field": "predicted_count",
+        "filter": "min_num",
+        "glossary": "predicted_count",
+    },
+    {
+        "label": "Dist Over %",
+        "field": "dist_over_probability",
+        "filter": "min_pct",
+        "glossary": "dist_over_probability",
     },
     {"label": "Market %", "field": "market_probability", "filter": "min_pct"},
     {
@@ -168,21 +189,113 @@ def _header_specs(df):
     return specs
 
 
+def _subscript(number: int) -> str:
+    if number < 0 or number > 9:
+        return str(number)
+    return _SUBSCRIPTS[number]
+
+
 def _init_board_state(key_prefix):
-    sort_col_key = f"{key_prefix}_sort_col"
-    sort_asc_key = f"{key_prefix}_sort_asc"
+    sort_stack_key = f"{key_prefix}_sort_stack"
+    legacy_col_key = f"{key_prefix}_sort_col"
+    legacy_asc_key = f"{key_prefix}_sort_asc"
 
-    if sort_col_key not in st.session_state:
-        st.session_state[sort_col_key] = "ev"
-        st.session_state[sort_asc_key] = False
+    if sort_stack_key not in st.session_state:
+        legacy_col = st.session_state.get(legacy_col_key, "ev")
+        legacy_asc = st.session_state.get(legacy_asc_key, False)
+        st.session_state[sort_stack_key] = [
+            {"field": legacy_col, "asc": legacy_asc},
+        ]
 
 
-def _sort_indicator(key_prefix, field):
-    if st.session_state.get(f"{key_prefix}_sort_col") != field:
-        return ""
-    if st.session_state.get(f"{key_prefix}_sort_asc", True):
-        return " ↑"
-    return " ↓"
+def _get_sort_stack(key_prefix):
+    _init_board_state(key_prefix)
+    return list(st.session_state.get(f"{key_prefix}_sort_stack", []))
+
+
+def _sort_priority_for_field(key_prefix, field):
+    for index, item in enumerate(_get_sort_stack(key_prefix)):
+        if item["field"] == field:
+            return index + 1
+    return None
+
+
+def _on_sort_header_click(key_prefix, field):
+    stack_key = f"{key_prefix}_sort_stack"
+    stack = list(st.session_state.get(stack_key, []))
+
+    for index, item in enumerate(stack):
+        if item["field"] == field:
+            stack[index] = {
+                "field": field,
+                "asc": not item["asc"],
+            }
+            st.session_state[stack_key] = stack
+            return
+
+    if len(stack) >= MAX_SORT_COLUMNS:
+        stack.pop()
+
+    stack.append({"field": field, "asc": False})
+    st.session_state[stack_key] = stack
+
+
+def _clear_sort_stack(key_prefix):
+    st.session_state[f"{key_prefix}_sort_stack"] = [
+        {"field": "ev", "asc": False},
+    ]
+
+
+def _filter_activation_index(key_prefix, df, field):
+    if not _filter_active(key_prefix, field, df):
+        return None
+
+    active_index = 0
+    for spec in _column_filter_specs(df):
+        if _filter_active(key_prefix, spec["field"], df):
+            active_index += 1
+            if spec["field"] == field:
+                return active_index
+    return None
+
+
+def _format_header_button_label(spec, key_prefix, df):
+    label = spec["label"]
+    field = spec["field"]
+    stack = _get_sort_stack(key_prefix)
+    suffix = ""
+
+    for index, item in enumerate(stack):
+        if item["field"] == field:
+            arrow = "↑" if item["asc"] else "↓"
+            suffix += _subscript(index + 1) + arrow
+            break
+
+    if _filter_active(key_prefix, field, df):
+        filter_index = _filter_activation_index(key_prefix, df, field)
+        if filter_index is not None:
+            suffix += f"·{_subscript(filter_index)}"
+
+    return label + suffix
+
+
+def _format_filter_panel_label(spec, key_prefix, df):
+    label = spec["label"]
+    filter_index = _filter_activation_index(key_prefix, df, spec["field"])
+    if filter_index is not None:
+        label += _subscript(filter_index)
+
+    sort_priority = _sort_priority_for_field(key_prefix, spec["field"])
+    if sort_priority is not None:
+        item = next(
+            entry
+            for entry in _get_sort_stack(key_prefix)
+            if entry["field"] == spec["field"]
+        )
+        arrow = "↑" if item["asc"] else "↓"
+        label += f" {_subscript(sort_priority)}{arrow}"
+
+    return label
 
 
 def _filter_active(key_prefix, field, df=None):
@@ -190,7 +303,10 @@ def _filter_active(key_prefix, field, df=None):
     if value is None:
         return False
     if isinstance(value, str):
-        return bool(value.strip())
+        stripped = value.strip()
+        if stripped in ("All", ""):
+            return False
+        return bool(stripped)
     if isinstance(value, (list, tuple)):
         if len(value) == 2 and df is not None and field in df.columns:
             low, high = value
@@ -200,6 +316,85 @@ def _filter_active(key_prefix, field, df=None):
     if isinstance(value, dict):
         return value.get("active", False)
     return bool(value)
+
+
+def _format_column_filter_chip(spec, value, df):
+    label = spec["label"]
+    filter_type = spec["filter"]
+    field = spec["field"]
+
+    if filter_type == "text":
+        return f'{label}: "{value.strip()}"'
+
+    if filter_type == "multiselect":
+        if field == "market":
+            names = ", ".join(market_label(item) for item in value)
+        else:
+            names = ", ".join(str(item) for item in value)
+        return f"{label}: {names}"
+
+    if filter_type == "side":
+        return f"{label}: {value}"
+
+    if filter_type == "steam":
+        return f"{label}: {value}"
+
+    if filter_type == "range" and isinstance(value, (list, tuple)) and len(value) == 2:
+        low, high = value
+        return f"{label}: {low:g}–{high:g}"
+
+    if filter_type == "min_pct":
+        return f"{label}: ≥ {float(value) * 100:.1f}%"
+
+    if filter_type == "min_num":
+        return f"{label}: ≥ {float(value):g}"
+
+    return label
+
+
+def _active_filter_labels(key_prefix, df):
+    labels = []
+
+    markets = st.session_state.get(f"{key_prefix}_markets", [])
+    if markets:
+        market_names = ", ".join(market_label(market) for market in markets)
+        labels.append(f"Market: {market_names}")
+
+    min_edge = st.session_state.get(f"{key_prefix}_min_edge", DEFAULT_MIN_EDGE)
+    if min_edge != DEFAULT_MIN_EDGE:
+        labels.append(f"Min edge: {min_edge * 100:.0f}%")
+
+    min_ev = st.session_state.get(f"{key_prefix}_min_ev", DEFAULT_MIN_EV)
+    if min_ev != DEFAULT_MIN_EV:
+        labels.append(f"Min EV: {min_ev * 100:.0f}%")
+
+    for spec in _column_filter_specs(df):
+        field = spec["field"]
+        if not _filter_active(key_prefix, field, df):
+            continue
+        value = st.session_state.get(f"{key_prefix}_filter_{field}")
+        labels.append(_format_column_filter_chip(spec, value, df))
+
+    return labels
+
+
+def _render_active_filter_summary(key_prefix, df):
+    labels = _active_filter_labels(key_prefix, df)
+    if not labels:
+        return
+
+    summary_row = st.container(horizontal=True, vertical_alignment="center")
+    with summary_row:
+        st.markdown(
+            "**Active filters:** "
+            + " · ".join(f"`{label}`" for label in labels)
+        )
+        st.button(
+            "Clear all filters",
+            key=f"{key_prefix}_clear_filters",
+            on_click=_clear_board_filters,
+            args=(key_prefix,),
+        )
 
 
 def _available_table_columns(filtered):
@@ -218,9 +413,21 @@ def _init_board_filter_state(key_prefix):
     if f"{key_prefix}_markets" not in st.session_state:
         st.session_state[f"{key_prefix}_markets"] = []
     if f"{key_prefix}_min_edge" not in st.session_state:
-        st.session_state[f"{key_prefix}_min_edge"] = 0.03
+        st.session_state[f"{key_prefix}_min_edge"] = DEFAULT_MIN_EDGE
     if f"{key_prefix}_min_ev" not in st.session_state:
-        st.session_state[f"{key_prefix}_min_ev"] = 0.05
+        st.session_state[f"{key_prefix}_min_ev"] = DEFAULT_MIN_EV
+
+
+def _clear_board_filters(key_prefix):
+    """Reset all board filter session keys for this version (not sort/columns)."""
+    st.session_state[f"{key_prefix}_markets"] = []
+    st.session_state[f"{key_prefix}_min_edge"] = DEFAULT_MIN_EDGE
+    st.session_state[f"{key_prefix}_min_ev"] = DEFAULT_MIN_EV
+
+    filter_prefix = f"{key_prefix}_filter_"
+    for key in list(st.session_state.keys()):
+        if key.startswith(filter_prefix):
+            del st.session_state[key]
 
 
 def _column_filter_specs(df):
@@ -238,9 +445,9 @@ def _render_filter_popover(df, key_prefix):
         st.session_state[visible_key] = list(table_columns)
 
     popover_filters = 0
-    if st.session_state.get(f"{key_prefix}_min_edge", 0.03) > 0.03:
+    if st.session_state.get(f"{key_prefix}_min_edge", DEFAULT_MIN_EDGE) > DEFAULT_MIN_EDGE:
         popover_filters += 1
-    if st.session_state.get(f"{key_prefix}_min_ev", 0.05) > 0.05:
+    if st.session_state.get(f"{key_prefix}_min_ev", DEFAULT_MIN_EV) > DEFAULT_MIN_EV:
         popover_filters += 1
 
     popover_label = ":material/tune: Filters & columns"
@@ -302,39 +509,61 @@ def _render_column_filters_panel(df, key_prefix):
                     df,
                     spec,
                     key_prefix,
-                    widget_label=spec["label"],
+                    widget_label=_format_filter_panel_label(
+                        spec,
+                        key_prefix,
+                        df,
+                    ),
                 )
 
 
-def _render_sort_controls(df, key_prefix):
+def _render_clickable_column_headers(df, key_prefix):
     _init_board_state(key_prefix)
-    specs = _header_specs(df)
-    sort_col_key = f"{key_prefix}_sort_col"
-    sort_asc_key = f"{key_prefix}_sort_asc"
-
-    sort_fields = [spec["field"] for spec in specs]
-    current_field = st.session_state.get(sort_col_key, "ev")
-    if current_field not in sort_fields:
-        current_field = sort_fields[0] if sort_fields else "ev"
-        st.session_state[sort_col_key] = current_field
+    specs = [spec for spec in _header_specs(df) if spec["field"] in df.columns]
 
     st.caption(GLOSSARY["header_click_help"])
 
-    control_row = st.container(horizontal=True, vertical_alignment="bottom")
-    with control_row:
-        selected_idx = st.selectbox(
-            "Sort by",
-            options=range(len(specs)),
-            format_func=lambda index: specs[index]["label"],
-            index=sort_fields.index(current_field),
-            key=f"{key_prefix}_sort_select",
+    toolbar = st.container(horizontal=True, vertical_alignment="center")
+    with toolbar:
+        st.markdown("**Column headers**")
+        st.button(
+            "Clear sort",
+            key=f"{key_prefix}_clear_sort",
+            on_click=_clear_sort_stack,
+            args=(key_prefix,),
         )
-        st.session_state[sort_col_key] = sort_fields[selected_idx]
 
-        st.toggle(
-            "Ascending",
-            key=sort_asc_key,
-        )
+    stack = _get_sort_stack(key_prefix)
+    if stack:
+        sort_labels = []
+        for index, item in enumerate(stack):
+            spec = next(
+                (entry for entry in specs if entry["field"] == item["field"]),
+                None,
+            )
+            if spec is None:
+                continue
+            arrow = "↑" if item["asc"] else "↓"
+            sort_labels.append(
+                f"{spec['label']}{_subscript(index + 1)}{arrow}"
+            )
+        if sort_labels:
+            st.caption("Sort order: " + " → ".join(sort_labels))
+
+    columns_per_row = 6
+    for row_start in range(0, len(specs), columns_per_row):
+        row_specs = specs[row_start: row_start + columns_per_row]
+        cols = st.columns(columns_per_row)
+        for column_index, spec in enumerate(row_specs):
+            with cols[column_index]:
+                st.button(
+                    _format_header_button_label(spec, key_prefix, df),
+                    key=f"{key_prefix}_hdr_{spec['field']}",
+                    on_click=_on_sort_header_click,
+                    args=(key_prefix, spec["field"]),
+                    use_container_width=True,
+                    help=GLOSSARY["header_click_sort"],
+                )
 
 
 def _render_header_filter(df, spec, key_prefix, *, widget_label=None):
@@ -383,8 +612,20 @@ def _render_header_filter(df, spec, key_prefix, *, widget_label=None):
         )
 
     if filter_type == "range":
-        low = float(df[field].min())
-        high = float(df[field].max())
+        series = pd.to_numeric(df[field], errors="coerce").dropna()
+        if series.empty:
+            st.caption("No numeric data")
+            return None
+
+        low = float(series.min())
+        high = float(series.max())
+        if low >= high:
+            st.caption(
+                f"All values: {low:g}",
+                help=GLOSSARY.get(f"filter_{field}", GLOSSARY["filter_line"]),
+            )
+            return (low, high)
+
         selected = st.slider(
             label or "Range",
             low,
@@ -425,13 +666,12 @@ def _render_header_filter(df, spec, key_prefix, *, widget_label=None):
 
 
 def _apply_header_filters(df, key_prefix):
+    """Apply column-header filters (AND-combined), then sort."""
     result = df.copy()
-    specs = _header_specs(df)
+    specs = _column_filter_specs(df)
 
     for spec in specs:
         field = spec["field"]
-        if field == "market":
-            continue
         filter_type = spec["filter"]
         value = st.session_state.get(f"{key_prefix}_filter_{field}")
 
@@ -477,15 +717,24 @@ def _apply_header_filters(df, key_prefix):
             if value is not None and value > 0:
                 result = result[result[field] >= value]
 
-    sort_col = st.session_state.get(f"{key_prefix}_sort_col")
-    sort_asc = st.session_state.get(f"{key_prefix}_sort_asc", True)
-
-    if sort_col and sort_col in result.columns:
-        result = result.sort_values(
-            sort_col,
-            ascending=sort_asc,
-            na_position="last",
-        )
+    sort_stack = _get_sort_stack(key_prefix)
+    if sort_stack:
+        sort_fields = [
+            item["field"]
+            for item in sort_stack
+            if item["field"] in result.columns
+        ]
+        ascending = [
+            item["asc"]
+            for item in sort_stack
+            if item["field"] in result.columns
+        ]
+        if sort_fields:
+            result = result.sort_values(
+                sort_fields,
+                ascending=ascending,
+                na_position="last",
+            )
 
     return result.reset_index(drop=True)
 
@@ -540,6 +789,16 @@ def _board_column_config(extra_stat_columns):
         "calibrated_probability": st.column_config.NumberColumn(
             "Calibrated %",
             help=GLOSSARY["calibrated_pct"],
+            format="%.1f",
+        ),
+        "predicted_count": st.column_config.NumberColumn(
+            "Pred #",
+            help=GLOSSARY["predicted_count"],
+            format="%.1f",
+        ),
+        "dist_over_probability": st.column_config.NumberColumn(
+            "Dist Over %",
+            help=GLOSSARY["dist_over_probability"],
             format="%.1f",
         ),
         "market_probability": st.column_config.NumberColumn(
@@ -617,6 +876,7 @@ def _prepare_board_table_df(filtered):
         "under_probability",
         "model_probability",
         "calibrated_probability",
+        "dist_over_probability",
         "market_probability",
         "devigged_market_prob",
         "edge",
@@ -627,6 +887,11 @@ def _prepare_board_table_df(filtered):
     ):
         if col in display.columns:
             display[col] = display[col].astype(float)
+
+    if "predicted_count" in display.columns:
+        display["predicted_count"] = display[
+            "predicted_count"
+        ].astype(float)
 
     if "steam_flag" in display.columns:
         display["steam_flag"] = filtered["steam_flag"].map(
@@ -691,6 +956,7 @@ def _ranking_column_config():
 
 
 def _apply_data_filters(df, markets, min_edge, min_ev, *, dedupe=True):
+    """Top-level filters: market type, min edge, min EV (all AND-combined)."""
     filtered = df.copy()
 
     if markets:
@@ -787,10 +1053,16 @@ def _render_probability_rankings(filtered, key_prefix):
     under_filtered = ranking_df[ranking_df["market"] != "batter_home_runs"]
     under_top = _top_props_by_probability(under_filtered, "under_probability")
 
+    link_row = st.container(horizontal=True)
+    with link_row:
+        st.markdown(f"**[Top Over %]({top_list_path('top_over')})**")
+        st.markdown(f"**[Top Under %]({top_list_path('top_under')})**")
+        st.markdown(f"**[Version compare]({compare_view_path()})**")
+
     col_over, col_under = st.columns(2)
 
     with col_over:
-        st.markdown(f"**[Top Over %]({top_list_path('top_over')})**")
+        st.markdown("**Top Over %**")
         if len(over_top):
             over_display = _prepare_board_table_df(over_top)[RANKING_TABLE_COLUMNS]
             st.dataframe(
@@ -803,7 +1075,7 @@ def _render_probability_rankings(filtered, key_prefix):
             st.caption("No props in the current filter set.")
 
     with col_under:
-        st.markdown(f"**[Top Under %]({top_list_path('top_under')})**")
+        st.markdown("**Top Under %**")
         if len(under_top):
             under_display = _prepare_board_table_df(under_top)[RANKING_TABLE_COLUMNS]
             st.dataframe(
@@ -846,19 +1118,22 @@ def render_board(df, version):
     key_prefix = f"board_{version}"
     _init_board_filter_state(key_prefix)
 
-    render_market_multiselect(
-        df,
-        key=f"{key_prefix}_markets",
-        label="Market type",
-    )
+    filter_row = st.container(horizontal=True, vertical_alignment="bottom")
+    with filter_row:
+        render_market_multiselect(
+            df,
+            key=f"{key_prefix}_markets",
+            label="Market type",
+        )
+        visible_columns, optional_stats = _render_filter_popover(df, key_prefix)
 
-    visible_columns, optional_stats = _render_filter_popover(df, key_prefix)
+    _render_active_filter_summary(key_prefix, df)
 
     filtered = _apply_data_filters(
         df,
         st.session_state.get(f"{key_prefix}_markets", []),
-        st.session_state.get(f"{key_prefix}_min_edge", 0.03),
-        st.session_state.get(f"{key_prefix}_min_ev", 0.05),
+        st.session_state.get(f"{key_prefix}_min_edge", DEFAULT_MIN_EDGE),
+        st.session_state.get(f"{key_prefix}_min_ev", DEFAULT_MIN_EV),
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -880,16 +1155,14 @@ def render_board(df, version):
     if len(filtered):
         _render_probability_rankings(filtered, key_prefix)
 
-        _render_sort_controls(filtered, key_prefix)
+        _render_clickable_column_headers(filtered, key_prefix)
         _render_column_filters_panel(filtered, key_prefix)
         header_filtered = _apply_header_filters(filtered, key_prefix)
 
         if len(header_filtered):
             st.caption(
-                f"Showing **{len(header_filtered)}** of **{len(filtered)}** props. "
-                "Use **Market type** above for prop categories, **Filter by column** "
-                "for row filters, and **Filters & columns** for edge, EV, and "
-                "column visibility."
+                f"Showing **{len(header_filtered)}** of **{len(filtered)}** props "
+                f"after column filters. All active filters combine with **AND** logic."
             )
             _render_board_table(
                 header_filtered,

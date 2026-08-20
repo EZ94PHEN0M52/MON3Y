@@ -25,6 +25,7 @@ from utils import (
     PROCESSED_DIR,
     ODDS_API_KEY,
     current_game_lines_path,
+    require_live_fetch,
     statcast_needs_refresh,
     statcast_raw_path,
 )
@@ -39,6 +40,7 @@ def fetch_statcast(
     end_date,
     force=False,
 ):
+    require_live_fetch("Statcast download (pybaseball)")
 
     print()
     print("=" * 60)
@@ -146,6 +148,7 @@ def _exit_props_fetch_failure(
 
 
 def fetch_current_props():
+    require_live_fetch("live sportsbook props (Odds API)")
 
     if not ODDS_API_KEY:
 
@@ -343,6 +346,7 @@ def fetch_current_props():
 # =========================================================
 
 def fetch_current_game_lines():
+    require_live_fetch("live game lines (Odds API)")
 
     if not ODDS_API_KEY:
 

@@ -1,9 +1,10 @@
 """
-Distributional count models for player props (Phase 6).
+Distributional count models for player props (Phase 6 / dual-head Phase 1).
 
 Lightweight Poisson rate models predict expected counts; P(stat > line) is
-derived at inference for any posted line. Proof-of-concept markets:
-batter_hits, pitcher_strikeouts.
+derived at inference for any posted line. Markets: batter_hits,
+pitcher_strikeouts, pitcher_walks. Pitcher K and walks also use the
+classifier + regressor dual-head path (see DUAL_HEAD_MARKETS).
 """
 
 from __future__ import annotations
@@ -32,7 +33,17 @@ DISTRIBUTIONAL_MARKETS = {
         "stat": "strikeouts",
         "role": "pitcher",
     },
+    "pitcher_walks": {
+        "stat": "walks",
+        "role": "pitcher",
+    },
 }
+
+# Phase 1 dual-head: classifier + Poisson regressor (edge stays on classifier).
+DUAL_HEAD_MARKETS = frozenset({
+    "pitcher_strikeouts",
+    "pitcher_walks",
+})
 
 
 def distributional_model_path(
@@ -226,6 +237,7 @@ def score_distributional_prop(
     )
 
     return {
+        "predicted_count": rate,
         "predicted_rate": rate,
         "over_probability": over_probability,
         "under_probability": under_probability,
@@ -238,3 +250,9 @@ def market_supports_distributional(
     market: str,
 ) -> bool:
     return market in DISTRIBUTIONAL_MARKETS
+
+
+def market_supports_dual_head(
+    market: str,
+) -> bool:
+    return market in DUAL_HEAD_MARKETS

@@ -30,8 +30,10 @@ from train import (  # noqa: E402
 from utils import (  # noqa: E402
     batter_features_path,
     feature_parquet_needs_refresh,
+    live_fetch_disabled,
     normalize_version,
     pitcher_features_path,
+    require_live_fetch,
     statcast_needs_refresh,
     statcast_raw_path,
 )
@@ -315,6 +317,11 @@ def fix_range(
     raw_path = statcast_raw_path(start_date, end_date)
 
     if statcast_needs_refresh(start_date, end_date):
+        if live_fetch_disabled():
+            require_live_fetch(
+                f"Statcast refresh for {start_date} → {end_date}"
+            )
+
         if raw_path.exists():
             print(
                 f">>> Statcast raw stale (missing games through "

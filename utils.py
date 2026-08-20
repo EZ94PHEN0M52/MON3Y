@@ -48,6 +48,31 @@ ODDS_API_KEY = os.getenv(
     "ODDS_API_KEY"
 )
 
+
+class LiveFetchDisabledError(RuntimeError):
+    """Raised when DISABLE_LIVE_FETCH blocks a network/API download."""
+
+
+def live_fetch_disabled() -> bool:
+    """True when live Statcast/Odds/MLB API calls must not run (backtests, offline)."""
+    value = os.getenv("DISABLE_LIVE_FETCH", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def require_live_fetch(operation: str) -> None:
+    """
+    Abort if DISABLE_LIVE_FETCH=1.
+
+    Set DISABLE_LIVE_FETCH=1 for backtests and any job that should read only
+    data/raw/ and data/processed/ parquets.
+    """
+    if live_fetch_disabled():
+        raise LiveFetchDisabledError(
+            f"Live fetch blocked ({operation}). "
+            "DISABLE_LIVE_FETCH=1 is set — use cached parquets or unset the env var."
+        )
+
+
 ODDS_API_BASE = (
     "https://api.the-odds-api.com/v4"
 )
@@ -358,6 +383,11 @@ def backtest_output_path(
     )
 
 
+BATTER_SCORE_VALIDATION_PATH = (
+    BACKTEST_DIR / "batter_score_validation.json"
+)
+
+
 def predictions_path(
     version="v2"
 ):
@@ -396,6 +426,72 @@ def predictions_best_path(
         PREDICTIONS_DIR /
         "predictions_v2_best.csv"
     )
+
+
+# ---------------------------------------------------------
+# VERSION COMPARE (multi-generation board)
+# ---------------------------------------------------------
+
+VERSION_COMPARE_SLOTS = (
+    {
+        "key": "v1",
+        "label": "V1",
+        "description": "Rolling player form (frozen baseline)",
+        "model_version": "v1",
+    },
+    {
+        "key": "v2",
+        "label": "V2",
+        "description": "Opponent, handedness, and park features",
+        "model_version": "v2",
+    },
+    {
+        "key": "v3",
+        "label": "V3",
+        "description": "Phases 1–6, calibration, distributional models (tag v3)",
+        "model_version": "v2",
+    },
+    {
+        "key": "main",
+        "label": "Main",
+        "description": "Active development workspace (current daily board)",
+        "model_version": "v2",
+    },
+)
+
+
+def compare_predictions_path(slot_key):
+    """
+    CSV path for a version-compare column.
+
+    v1 → predictions.csv; v2/main → predictions_v2.csv;
+    v3 → predictions_v3.csv (copy from frozen mlb-prop-model-v3/ if needed).
+    """
+    slot_key = str(slot_key).lower().strip()
+
+    if slot_key == "v1":
+        return predictions_path("v1")
+
+    if slot_key == "v2":
+        return PREDICTIONS_DIR / "predictions_v2.csv"
+
+    if slot_key == "v3":
+        return PREDICTIONS_DIR / "predictions_v3.csv"
+
+    if slot_key == "main":
+        return predictions_path("v2")
+
+    raise ValueError(
+        f"Unknown compare slot {slot_key!r}. "
+        f"Use one of: {[s['key'] for s in VERSION_COMPARE_SLOTS]}."
+    )
+
+
+def version_has_models(version="v2"):
+    """True when at least one market model .pkl exists for the version."""
+    version = normalize_version(version)
+    models_dir = version_models_dir(version)
+    return any(models_dir.glob("*.pkl"))
 
 
 # ---------------------------------------------------------

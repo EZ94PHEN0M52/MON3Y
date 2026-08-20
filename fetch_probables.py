@@ -21,6 +21,7 @@ from utils import (
     PROCESSED_DIR,
     canonical_odds_team_key,
     coerce_mlb_id,
+    require_live_fetch,
 )
 
 
@@ -61,6 +62,7 @@ def _fetch_schedule_mlb_api(
     game_date: str,
     timeout: int = 30,
 ) -> list:
+    require_live_fetch("MLB Stats API probables")
     url = f"{MLB_STATS_API}/schedule"
     params = {
         "sportId": 1,

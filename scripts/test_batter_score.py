@@ -407,6 +407,75 @@ def test_pitcher_rows_by_sp_nan_id_falls_back_to_name():
     assert result is None or not result.empty
 
 
+def test_batter_score_validation_loader():
+    import json
+    import tempfile
+
+    import batter_score_data as bsd
+
+    validated_payload = {
+        "validated": True,
+        "sample_size": 500,
+        "spearman_correlation": 0.22,
+        "timestamp": "2026-08-19T00:00:00+00:00",
+    }
+    missing_payload = {"validated": False, "sample_size": 0}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "batter_score_validation.json"
+        original = bsd.BATTER_SCORE_VALIDATION_PATH
+
+        try:
+            bsd.BATTER_SCORE_VALIDATION_PATH = path
+            bsd.clear_batter_score_validation_cache()
+            assert bsd.is_batter_score_validated() is False
+
+            path.write_text(json.dumps(validated_payload), encoding="utf-8")
+            bsd.clear_batter_score_validation_cache()
+
+            loaded = bsd.load_batter_score_validation()
+            assert loaded["validated"] is True
+            assert loaded["sample_size"] == 500
+            assert bsd.is_batter_score_validated() is True
+
+            path.write_text(json.dumps(missing_payload), encoding="utf-8")
+            bsd.clear_batter_score_validation_cache()
+            assert bsd.is_batter_score_validated() is False
+        finally:
+            bsd.BATTER_SCORE_VALIDATION_PATH = original
+            bsd.clear_batter_score_validation_cache()
+
+
+def test_score_batter_as_of_point_in_time():
+    from batter_score_data import (
+        actual_raw_points_on_date,
+        score_batter_as_of,
+    )
+
+    rows = []
+    for idx in range(12):
+        rows.append(
+            {
+                "game_date": f"2026-08-{idx + 1:02d}",
+                "player_name": "Backtest Batter",
+                "hits": 1,
+                "total_bases": 2,
+                "walks": 1,
+                "team": "AAA",
+            }
+        )
+
+    frame = pd.DataFrame(rows)
+    target = "2026-08-12"
+
+    actual = actual_raw_points_on_date(frame, target)
+    assert actual == 4.0  # hits(1) + tb(2) + bb(1)
+
+    scored = score_batter_as_of(frame, target)
+    assert scored is not None
+    assert 0.0 <= scored.batter_score <= 100.0
+
+
 if __name__ == "__main__":
     test_renormalize_phase_a_weights()
     test_renormalize_phase_b_weights()
@@ -429,4 +498,6 @@ if __name__ == "__main__":
     test_markets_for_kind_includes_stolen_bases()
     test_coerce_mlb_id_handles_nan()
     test_pitcher_rows_by_sp_nan_id_falls_back_to_name()
+    test_batter_score_validation_loader()
+    test_score_batter_as_of_point_in_time()
     print("All batter score tests passed.")

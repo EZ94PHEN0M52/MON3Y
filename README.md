@@ -1,6 +1,269 @@
 # MLB Prop Model (Active Development)
 
-**Active workspace** for the MLB prop pipeline. Frozen snapshots: [`mlb-prop-model-v1/`](../mlb-prop-model-v1) (V1 baseline), [`mlb-prop-model-v2/`](../mlb-prop-model-v2) (pre–Phases 1–6), [`mlb-prop-model-v3/`](../mlb-prop-model-v3/) (**v3 tag** — Phases 1–6, Batter Score A–D, board filters, Pick Builder).
+**Active workspace** for the MLB player-prop research pipeline. Compare model **Over %** and **Under %** against sportsbook lines, browse props in Streamlit, and track how the project evolved from **V1 → V2 → V3 → Main**.
+
+- **GitHub:** [EZ94PHEN0M52/MON3Y](https://github.com/EZ94PHEN0M52/MON3Y) — tags **`v1`**, **`v2`**, **`v3`** mark frozen baselines; active development is on **`main`**
+- **Frozen local copies:** [`mlb-prop-model-v1/`](../mlb-prop-model-v1), [`mlb-prop-model-v2/`](../mlb-prop-model-v2), [`mlb-prop-model-v3/`](../mlb-prop-model-v3/)
+
+**Table of contents:** [Quick start](#quick-start-for-beginners) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
+
+---
+
+## Quick start for beginners
+
+This section assumes you have **never opened this repo before**. Follow the steps in order. Each command explains what it does, what files it creates, how long it usually takes, and what to do when something is missing.
+
+### What this project is
+
+The MLB Prop Model is a **research tool** for Major League Baseball **player props** — bets like “Will this pitcher get over 5.5 strikeouts?” or “Will this batter get over 1.5 hits?”
+
+The pipeline does four things:
+
+1. **Downloads data** — Statcast stats, today’s sportsbook lines (The Odds API), probable starting pitchers, and game totals/spreads.
+2. **Builds features** — rolling averages, opponent strength, park effects, and similar inputs for each player-game.
+3. **Trains or loads ML models** — LightGBM classifiers that estimate **P(actual stat > posted line)** for each prop.
+4. **Shows results in Streamlit** — a sortable **board** with **Over %**, **Under %**, **edge** (model vs market), and **EV** (expected value after vig).
+
+**Versions** are snapshots of how the project grew:
+
+| Label | What it means |
+|-------|----------------|
+| **V1** | Rolling form only (simple baseline) |
+| **V2** | + opponent, handedness, park |
+| **V3** | + Phases 1–6 (historical odds, multi-book, calibration, Batter Score, Pick Builder) — frozen at git tag **`v3`** |
+| **Main** | Today’s active code in this folder — same models as V3 plus post-v3 upgrades (dual-head pitcher K/walks, board filter UX, Batter Score validation) |
+
+**Version compare** puts all four generations side-by-side on one table so you can see how **Over %** and **Under %** differ for the same player and market.
+
+This is **not** a betting service or a guarantee of profit. It is a statistical research dashboard.
+
+### Prerequisites
+
+Install these **once** on your Mac before cloning or opening the project:
+
+| Requirement | Why | Install |
+|-------------|-----|---------|
+| **Python 3.12** | Project targets 3.12 | `brew install python@3.12` |
+| **libomp** | LightGBM needs OpenMP on macOS | `brew install libomp` |
+| **Odds API key** | Live prop lines from sportsbooks | Free key at [the-odds-api.com](https://the-odds-api.com/) |
+| **Git** (optional) | Clone from GitHub | `brew install git` |
+
+You do **not** need a paid Odds API plan for the daily board. Paid history is only needed for [historical backtesting](#historical-odds--backtesting-phase-1).
+
+### First-time setup (from zero)
+
+**1. Open a terminal and go to the project folder.**
+
+```bash
+cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
+```
+
+**2. Create and activate a virtual environment** (~30 seconds).
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+```
+
+You should see `(.venv)` in your prompt. Run `source .venv/bin/activate` again whenever you open a new terminal tab.
+
+**3. Install Python dependencies** (~1–3 minutes).
+
+```bash
+pip install -r requirements.txt
+```
+
+**4. Add your API key** (~1 minute).
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set `ODDS_API_KEY=your_key_here`. Never commit `.env` — it is gitignored.
+
+**5. (Optional) Download training-season data** — only if `models/v1/` or `models/v2/` are empty and you need to train from scratch. Skip if pre-trained `.pkl` files already exist under `models/`. See [Initial data (one time)](#initial-data-one-time) for full commands (~10–30 minutes for Statcast + features + train).
+
+At this point the environment is ready. The next section prepares **all four version-compare columns**.
+
+### Prepare all versions for Version Compare
+
+Version compare reads **four prediction CSV files** on disk. Each column maps to a project generation. You do not need to run all steps every day — only when files are missing or you want a refresh.
+
+#### Overview: files each version needs
+
+| Column | Model folder | Predictions file | How to create |
+|--------|--------------|------------------|---------------|
+| **V1** | `models/v1/*.pkl` | `data/predictions/predictions.csv` | `predict.py --version v1` |
+| **V2** | `models/v2/*.pkl` | `data/predictions/predictions_v2.csv` | `./run_daily.sh` or `predict.py --version v2` |
+| **V3** | `models/v2/*.pkl` (same weights as V2) | `data/predictions/predictions_v3.csv` | **Manual copy** from frozen v3 snapshot |
+| **Main** | `models/v2/*.pkl` | `data/predictions/predictions_v2.csv` (same file as V2) | `./run_daily.sh` |
+
+**Feature window for compare:** [`ui/version_compare.py`](ui/version_compare.py) ranks props scored from **2026-03-25** through **2026-08-16** (opening day through a fixed end date). Use those dates in `predict.py` when generating V1 CSVs so columns align.
+
+**Timing:** A full first-time path (Statcast + features + daily pipeline + V1 predict + V3 copy) can take **20–45 minutes**. A normal `./run_daily.sh` rerun with warm caches is usually **2–8 minutes**.
+
+---
+
+#### Step A — V2 + Main (daily pipeline)
+
+This is the **main path**. It refreshes today’s lines and writes `predictions_v2.csv`, which powers both the **V2** and **Main** compare columns.
+
+```bash
+cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
+./run_daily.sh
+```
+
+**What it does (in order):**
+
+1. `scripts/ensure_features.py --fix` — validates or rebuilds V2 feature parquets for the current season through **yesterday** (~1–15 min if rebuild needed; seconds if parquets are fresh).
+2. `fetch_data.py --props` — downloads today’s player prop lines → `data/processed/current_props.parquet` + an intraday snapshot under `data/raw/odds/snapshots/`.
+3. `fetch_data.py --game-lines` — game totals/spreads → `data/processed/current_game_lines.parquet`.
+4. `fetch_probables.py` — probable starting pitchers → `data/processed/daily_probables.parquet` (feeds Batter Score on the board).
+5. `predict.py --version v2` — scores every prop → `data/predictions/predictions_v2.csv` and `predictions_v2_best.csv` (~30 s–2 min).
+
+**Expected files after success:**
+
+```text
+data/processed/batter_features_v2_2026-03-25_YYYY-MM-DD.parquet
+data/processed/pitcher_features_v2_2026-03-25_YYYY-MM-DD.parquet
+data/processed/current_props.parquet
+data/processed/current_game_lines.parquet
+data/processed/daily_probables.parquet
+data/predictions/predictions_v2.csv
+models/v2/*.pkl                    # at least one market model
+```
+
+**If `./run_daily.sh` fails:**
+
+| Symptom | Fix |
+|---------|-----|
+| `models/v2/` empty | Run `./run_daily.sh --train` once (needs 2025 training data — see [Initial data](#initial-data-one-time)) |
+| Feature columns missing | Let `ensure_features.py --fix` finish; see [Troubleshooting](#troubleshooting) |
+| `OUT_OF_USAGE_CREDITS` | `./run_daily.sh --skip-props` uses cached props if `current_props.parquet` exists |
+| `LightGBM` / libomp error | `brew install libomp` |
+| No MLB games today | Props fetch may return zero rows — normal on off-days |
+
+---
+
+#### Step B — V1 predictions
+
+V1 uses **older, simpler models** in `models/v1/`.
+
+```bash
+source .venv/bin/activate
+python predict.py --start 2026-03-25 --end 2026-08-16 --version v1
+```
+
+**Writes:** `data/predictions/predictions.csv`  
+**Requires:** `models/v1/*.pkl` and V1 feature parquets (`batter_features_v1_*`, `pitcher_features_v1_*`). Build with [Initial data](#initial-data-one-time) if missing.  
+**Time:** ~1–3 minutes when models and features exist.
+
+**If V1 models are missing:** run the V1 block in [Initial data](#initial-data-one-time), or copy `models/v1/` from [`mlb-prop-model-v1/`](../mlb-prop-model-v1/) if you have that snapshot.
+
+---
+
+#### Step C — V3 predictions (frozen snapshot)
+
+**V3 is not auto-generated** in this workspace. It represents the **frozen git tag `v3`** state. Copy a predictions file from the sibling snapshot folder:
+
+```bash
+cp ../mlb-prop-model-v3/data/predictions/predictions_v2.csv \
+   data/predictions/predictions_v3.csv
+```
+
+**Writes:** `data/predictions/predictions_v3.csv`  
+**Requires:** The [`mlb-prop-model-v3/`](../mlb-prop-model-v3/) folder exists beside this repo (created when the v3 snapshot was copied).  
+**Time:** Instant (file copy).
+
+If you do not have `mlb-prop-model-v3/`, clone or copy it from the **`v3`** tag on [GitHub MON3Y](https://github.com/EZ94PHEN0M52/MON3Y/tags), or leave V3 empty — the compare table shows **—** for that column.
+
+---
+
+#### Step D — Verify all four slots
+
+```bash
+ls -la data/predictions/predictions.csv \
+       data/predictions/predictions_v2.csv \
+       data/predictions/predictions_v3.csv
+ls models/v1/*.pkl 2>/dev/null | head -3
+ls models/v2/*.pkl 2>/dev/null | head -3
+```
+
+You want at least **one** `.pkl` per version folder and **non-empty** CSVs for each generation you care about. V2 and Main intentionally share `predictions_v2.csv`, so those two columns will match until you change that wiring in [`utils.py`](utils.py).
+
+**Shortcut on the compare page:** click **Generate missing predictions** — this runs `predict.py` for **V1** and/or **V2** when CSVs are missing and models exist. It **does not** create V3 (copy only) and **does not** duplicate Main beyond the shared V2 file.
+
+---
+
+### Open Streamlit and Version Compare
+
+**Launch the app** (after `./run_daily.sh` or at least one successful `predict.py` run):
+
+```bash
+streamlit run app.py
+# or: ./run_daily.sh --streamlit   # runs pipeline first, then opens the app
+```
+
+Open **http://localhost:8501** in your browser.
+
+**Go to Version Compare** any of these ways:
+
+- **URL:** `http://localhost:8501/?view=compare`
+- **Sidebar:** **Version compare**
+- **Main board:** link **Version compare** under the Top Over / Top Under previews
+
+Stop the server with **Ctrl+C** in the terminal.
+
+### What you'll see on the Version Compare page
+
+1. **Title and caption** — explains that the table shows the **top 30** unique `(player, market)` props, one best book per version, for feature window **2026-03-25 → 2026-08-16**.
+
+2. **Version sources expander** — lists each generation (V1, V2, V3, Main), its CSV filename, whether predictions and models were found (**loaded** vs **missing**), and the model directory (`models/v1/` or `models/v2/`).
+
+3. **Generate missing predictions** — primary button to backfill V1/V2 CSVs from disk models.
+
+4. **Comparison table** — columns: **Player**, **Market**, **Line**, then for each loaded version **Over %** and **Under %** (e.g. **V1 Over**, **V1 Under**, … **Main Over**, **Main Under**). Missing versions show **—**.
+
+5. **Ranking** — rows sorted by **Main |edge|** when Main is loaded; otherwise max **|edge|** or max **Over %** across loaded versions.
+
+6. **Footer disclaimer** — model estimates only, not betting advice.
+
+The compare view uses [`@st.cache_data`](ui/version_compare.py) keyed on prediction CSV **modification times** — it reloads when you regenerate predictions, not on every widget click.
+
+For implementation details (merge keys, dedupe, slot config), see [Version compare (reference)](#version-compare-v1--v2--v3--main) below.
+
+---
+
+## Version compare (V1 / V2 / V3 / Main)
+
+Side-by-side **Over %** and **Under %** for the same player and market across project generations. Implementation: [`ui/version_compare.py`](ui/version_compare.py); slot definitions in [`utils.py`](utils.py) (`VERSION_COMPARE_SLOTS`).
+
+### Version columns
+
+| Column | Models | Predictions CSV | Notes |
+|--------|--------|-----------------|-------|
+| **V1** | `models/v1/` | `data/predictions/predictions.csv` | Rolling-form baseline; git tag **`v1`** |
+| **V2** | `models/v2/` | `data/predictions/predictions_v2.csv` | Opponent / handedness / park; git tag **`v2`** |
+| **V3** | `models/v2/` | `data/predictions/predictions_v3.csv` | Frozen **`v3`** tag — manual copy from [`mlb-prop-model-v3/`](../mlb-prop-model-v3/) |
+| **Main** | `models/v2/` | `predictions_v2.csv` (same as V2) | Active **`main`** branch / daily board |
+
+V2 and Main share one CSV today, so those columns match unless you point Main at a different file later. Missing versions show **—** in the table.
+
+### Prep commands (quick reference)
+
+```bash
+# V2 + Main
+./run_daily.sh
+
+# V1
+python predict.py --start 2026-03-25 --end 2026-08-16 --version v1
+
+# V3 — copy from frozen snapshot
+cp ../mlb-prop-model-v3/data/predictions/predictions_v2.csv \
+   data/predictions/predictions_v3.csv
+```
+
+**Ranking:** Main `|edge|` → max `|edge|` across versions → max Over %. Cache busts when prediction CSV mtimes change.
 
 ---
 
@@ -9,7 +272,7 @@
 | | V1 (frozen) | V2 (frozen) | V3 (frozen) | Active (`main`) |
 |--|-------------|-------------|-------------|-----------------|
 | **Location** | `mlb-prop-model-v1/` | `mlb-prop-model-v2/` | `mlb-prop-model-v3/` | `mlb-prop-model/` |
-| **Git tag** | — | `v2` | `v3` | — |
+| **Git tag** | `v1` | `v2` | `v3` | — (branch **`main`** on [MON3Y](https://github.com/EZ94PHEN0M52/MON3Y)) |
 | **Player features** | Rolling L3/L5/L10/L20/season | + opponent, handedness, park | + game lines, stolen bases | Same as V3 |
 | **Odds pipeline** | Live props only | Live props only | Phases 1–6 (history, multi-book, movement, calibration) | Same as V3 |
 | **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 |
@@ -19,34 +282,15 @@
 
 All snapshots can run side-by-side on the same machine. Frozen folders are never modified; active development continues here on **`main`**.
 
-**Next architecture:** Dual-head pitcher K/walks models (50/50 classifier + regressor) and Batter Score validation — confirmed plan in [docs/ROADMAP.md](docs/ROADMAP.md). Completed Phases 1–6 are documented below.
+**Next architecture:** Dual-head pitcher K/walks models (classifier + regressor) and Batter Score validation — confirmed plan in [docs/ROADMAP.md](docs/ROADMAP.md). Completed Phases 1–6 are documented below.
 
 ---
 
-## Prerequisites
+## Standalone frozen copies (optional)
 
-- **Python 3.12:** `brew install python@3.12`
-- **libomp** (LightGBM on macOS): `brew install libomp`
-- **Odds API key:** [the-odds-api.com](https://the-odds-api.com/)
+If you want to run a **frozen generation** without touching this active folder, use the sibling snapshot directories. Each has its own `data/`, `models/`, and `.env`. Virtual environments are **not** copied — recreate `.venv` on first use.
 
----
-
-## First-time setup
-
-```bash
-cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
-
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-cp .env.example .env
-# Edit .env: ODDS_API_KEY=your_key
-```
-
----
-
-## Standalone v3 setup (recommended frozen copy)
+### Standalone v3 setup (recommended frozen copy)
 
 [`mlb-prop-model-v3/`](../mlb-prop-model-v3/) is the **frozen V3 snapshot** (git tag `v3`) — a self-contained folder copy sibling to active development in [`mlb-prop-model/`](../mlb-prop-model/). Use it to run the full Phases 1–6 pipeline, Batter Score, board filters, and Pick Builder without modifying the active workspace.
 
@@ -105,6 +349,114 @@ python build_features.py --start 2026-03-25 --end 2026-08-16 --version v2
 
 ---
 
+## Cache-first data policy (no redundant API calls)
+
+All inference, UI, and backtest paths read **local parquets and CSVs** first. Live downloads are confined to explicit fetch scripts and the daily pipeline — never triggered implicitly by `predict.py`, backtests, or Streamlit reruns.
+
+### Single source of truth
+
+| Directory | Contents |
+|-----------|----------|
+| **`data/raw/`** | Statcast pitch-level (`statcast_{start}_{end}.parquet`), historical odds partitions (`odds/historical/date=…/`), intraday prop snapshots (`odds/snapshots/`) |
+| **`data/processed/`** | Batter/pitcher feature parquets, `current_props.parquet`, `current_game_lines.parquet`, `daily_probables.parquet` |
+| **`data/predictions/`** | `predictions_v2.csv`, `predictions_v2_best.csv` (written by `predict.py`; read by Streamlit) |
+| **`data/backtest/`** | Backtest CSVs and `batter_score_validation.json` |
+
+Downstream code must not call pybaseball, the Odds API, or the MLB Stats API directly — only read from these paths (or raise if a required file is missing).
+
+### What hits the network vs local disk
+
+**Live fetch scripts** (the only modules that download):
+
+| Script | API | Writes |
+|--------|-----|--------|
+| `fetch_data.py --statcast` | pybaseball Statcast | `data/raw/statcast_{start}_{end}.parquet` |
+| `fetch_data.py --props` | Odds API (via `odds_api.py`) | `data/processed/current_props.parquet` + snapshot |
+| `fetch_data.py --game-lines` | Odds API | `data/processed/current_game_lines.parquet` |
+| `fetch_data.py --probables` | MLB Stats API (via `fetch_probables.py`) | `data/processed/daily_probables.parquet` |
+| `fetch_probables.py` | MLB Stats API | same probables parquet |
+| `fetch_historical_odds.py` | Odds API | `data/raw/odds/historical/date=…/` |
+| `odds_api.py` | Odds API | used by fetch scripts only — not imported by inference |
+
+**Read-only paths** (parquet/CSV + models only; zero network):
+
+| Module | Reads |
+|--------|-------|
+| `build_features.py` | `data/raw/statcast_*.parquet` only (no live Statcast download) |
+| `predict.py` | Feature parquets, `current_props.parquet`, `current_game_lines.parquet`, model pickles |
+| `scripts/backtest.py` | Feature parquets, `data/raw/odds/historical/`, models |
+| `scripts/backtest_batter_score.py` | `data/processed/batter_features_*.parquet` only |
+| `batter_score_data.py` | Feature parquets (game logs), `daily_probables.parquet` (SP lookup), `data/raw/statcast_*.parquet` via `@lru_cache` for Phase D arsenal — never live Statcast |
+| `app.py` (Streamlit) | Predictions CSV + enrichment from the parquets above |
+
+`build_features.py` may call `pybaseball.playerid_reverse_lookup` for ID resolution; it does **not** call `statcast()` — Statcast must already exist under `data/raw/`.
+
+### `DISABLE_LIVE_FETCH=1` guard
+
+Set this env var to block accidental network calls in shared helpers. Implemented in [`utils.py`](utils.py) via `require_live_fetch()` / `live_fetch_disabled()`.
+
+**Blocked when set:**
+
+| Module | Operation blocked |
+|--------|-------------------|
+| `fetch_data.py` | `--statcast`, `--props`, `--game-lines` |
+| `fetch_probables.py` | MLB Stats API probables download |
+| `fetch_historical_odds.py` | Historical props and game lines |
+| `odds_api.py` | Any Odds API request |
+| `scripts/ensure_features.py --fix` | Statcast **refresh** when raw parquet is stale or missing games through `--end` |
+
+**Auto-set:** `scripts/backtest_batter_score.py` calls `os.environ.setdefault("DISABLE_LIVE_FETCH", "1")` at import — safe to run without remembering the flag.
+
+**When to set:** Offline backtests, CI, re-running `predict.py` / Streamlit against cached data, or any job that must not spend API quota.
+
+**When to unset:** Initial data download, daily pipeline (`./run_daily.sh`), manual `fetch_data.py` / `fetch_historical_odds.py` runs, or `ensure_features.py --fix` when Statcast raw needs a refresh.
+
+```bash
+# Example: prop backtest with zero API calls (historical odds + features must exist on disk)
+DISABLE_LIVE_FETCH=1 python scripts/backtest.py --start 2025-04-01 --end 2025-06-30 --version v2
+```
+
+### Zero-API run patterns
+
+These workflows assume prerequisites are already on disk (`build_features.py`, fetch scripts, or a prior `./run_daily.sh`):
+
+```bash
+# Batter Score validation — auto-sets DISABLE_LIVE_FETCH; Phase A only (game_context=None)
+python scripts/backtest_batter_score.py --start 2025-04-01 --end 2025-06-30
+
+# Prop-model backtest — historical odds + feature parquets + models
+DISABLE_LIVE_FETCH=1 python scripts/backtest.py --start 2025-04-01 --end 2025-06-30 --version v2
+
+# Predictions from cached props/features (no live fetch unless ensure_features rebuilds Statcast)
+DISABLE_LIVE_FETCH=1 python predict.py --start 2026-03-25 --end 2026-08-16 --version v2
+
+# Streamlit — reads predictions CSV + local parquets only; no API on rerun
+streamlit run app.py
+# Version compare: see top of README (?view=compare)
+```
+
+**Streamlit caching:** [`app.py`](app.py) wraps board enrichment in `@st.cache_data(show_spinner=False)`, keyed on the predictions CSV **mtime** (`predictions_mtime`). Widget reruns reuse the cached dataframe until `predict.py` rewrites the CSV. Batter Score / L5-L10 enrichment inside the cache uses `@lru_cache` on feature and Statcast **parquet** loads in [`batter_score_data.py`](batter_score_data.py) — not live API calls.
+
+### Daily pipeline: one fetch per run
+
+[`run_daily.sh`](run_daily.sh) is designed for **at most one live fetch per resource per daily pass**:
+
+1. **`ensure_features.py --fix`** once at startup (may fetch Statcast only if raw is stale — skipped when `DISABLE_LIVE_FETCH=1` and rebuild is needed).
+2. **`fetch_data.py --props`** — unless `--skip-props` → uses cached `current_props.parquet`.
+3. **`fetch_data.py --game-lines`** — unless `--skip-game-lines` → cached `current_game_lines.parquet`.
+4. **`fetch_data.py --probables`** — unless `--skip-probables` → cached `daily_probables.parquet`.
+5. **`predict.py`** — read-only (no fetch).
+
+Use skip flags for intraday re-predicts or when odds/probables were fetched earlier the same day. Full flag table: [Daily workflow (V2)](#daily-workflow-v2).
+
+Historical odds backfill (`fetch_historical_odds.py`) and evaluation ([`./run_evaluation.sh`](#evaluation-pipeline-phase-6)) are **outside** `run_daily.sh` — run them separately when needed.
+
+### Dual-head pitcher K / walks (brief)
+
+Post-v3 upgrade for count markets **`pitcher_strikeouts`** and **`pitcher_walks`**: a lightweight **dual-head** — existing LightGBM **classifier** (beat the line?) plus a Poisson **regressor** (expected count μ). Classifier probability remains the source of truth for **edge** and **EV**; regressor outputs (`predicted_count`, `dist_over_probability`) appear on the board for context. Inference: [`predict.py`](predict.py) (`DUAL_HEAD_MARKETS` in [`distributional.py`](distributional.py)). Training: [`scripts/fit_distributional.py`](scripts/fit_distributional.py) → `models/v2/dist/{market}.pkl` (via [`./run_evaluation.sh`](#evaluation-pipeline-phase-6)). A 50/50 classifier+regressor probability blend is deferred — see [docs/ROADMAP.md](docs/ROADMAP.md).
+
+---
+
 ## Historical odds & backtesting (Phase 1)
 
 Phase 1 adds historical sportsbook prop storage and backtesting against Statcast outcomes. This establishes a **baseline** for evaluating model edges on real book prices. See the full [Roadmap: Phases 1–6](#roadmap-phases-16) for Phases 4–6 (line movement, market expansion, model refinement); [Phases 2–3](#phase-2-multi-bookmaker-intelligence) (multi-book intelligence and real-line training) are implemented.
@@ -132,7 +484,7 @@ data/raw/odds/historical/date=YYYY-MM-DD/props.parquet
 
 Each row matches live `current_props.parquet` schema plus `snapshot_date` and `fetched_at`. Dates already fetched are skipped unless `--force`. Quota errors stop the run without overwriting existing files.
 
-**Backtest** (requires feature parquets and models for the same date range):
+**Backtest** (requires feature parquets, historical odds parquets, and models for the same date range). **Offline-safe:** set `DISABLE_LIVE_FETCH=1` — reads only `data/processed/` feature parquets and `data/raw/odds/historical/` (see [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls)).
 
 ```bash
 # Backtest
@@ -439,7 +791,35 @@ Feature parquets store **`team` as abbreviations** (e.g. `SF`, `CLE`). Probables
 
 Phase D activates when `arsenal_ready()` returns true (usage sums to ~1.0), SP ERA L5 is available, and **`sp_id` is a valid integer** (not NaN/TBD).
 
-### 8. Risks, open items, and what's next
+### 8. Validation backtest (offline)
+
+Orthogonal validation track — does **not** affect board edge, EV, or prop-model ranking. Confirms that point-in-time Batter Score (Phase A) ranks batters vs same-game outcomes.
+
+**Command:**
+
+```bash
+python scripts/backtest_batter_score.py --start 2025-04-01 --end 2025-06-30
+python scripts/backtest_batter_score.py --start 2025-04-01 --end 2025-06-30 --min-sample 100 --min-spearman 0.15 --write-detail
+```
+
+**Prerequisite:** `build_features.py` (or `ensure_features.py --fix`) for a batter feature parquet covering the date range.
+
+**Data policy:** Reads `data/processed/batter_features_*.parquet` only — no Statcast download, no Odds API, no MLB Stats API. Sets `DISABLE_LIVE_FETCH=1` automatically. Scores each batter-game with **`game_context=None`** so validation stays **Phase A only** (season baseline + recent form from pre-game history; no probables lookup, no SP ERA/H2H, no raw Statcast arsenal per row).
+
+**Target outcome:** Same-game **H + TB + BB** raw points (the Batter Score input stat).
+
+**Validation gates** (written to `data/backtest/batter_score_validation.json`; drives player-page **✓ Batter Score validated**):
+
+| Gate | Default |
+|------|---------|
+| `sample_size` | ≥ 100 scored batter-games |
+| `spearman_correlation` | ≥ 0.15 (primary metric — robust to non-linear 0–100 index) |
+
+Also reports Pearson correlation and MAE on implied raw points. Optional `--write-detail` saves per-game rows to `data/backtest/batter_score_validation_detail.parquet`.
+
+See [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls) for the full offline run matrix.
+
+### 9. Risks, open items, and what's next
 
 | Risk / item | Mitigation / status |
 |-------------|---------------------|
@@ -448,12 +828,12 @@ Phase D activates when `arsenal_ready()` returns true (usage sums to ~1.0), SP E
 | TBD `sp_id` with known name | ERA L5 + **Partial** label; H2H/arsenal wait for ID — see [NaN sp_id fix](#6-nan-sp_id--tbd-starter-ids-2026-08-19) |
 | Doubleheaders | Same `(game_date, home, away)` join keys — `commence_time` disambiguation TODO |
 | H2H noise | Gated at **MIN_PA_H2H = 10**; ERA-only below threshold |
-| Not a validated edge | Backtest Batter Score vs prop outcomes — **open** |
+| Not a validated edge | Run [Batter Score validation backtest](#8-validation-backtest-offline); player page shows validated flag when gates pass — board edge unchanged |
 | Partial vs Full sorting | UI shows label; avoid comparing unlike labels on one sort |
 
 **Open polish:** doubleheader `commence_time` join, stale probables badge, optional team ERA proxy validation.
 
-**Deferred:** Batter Score backtest validation; Phase 6 extras (negative binomial, calibrators for all 13 markets).
+**Deferred:** Phase 6 extras (negative binomial, calibrators for all 13 markets).
 
 ---
 
@@ -554,7 +934,7 @@ Requires V2 feature parquets for the window (`ensure_features.py --fix` or `./ru
 
 ## Daily workflow (V2)
 
-**Preferred path:** run the full pipeline from the project root with `./run_daily.sh`. No manual `source .venv/bin/activate` is required — the script sources `.venv/bin/activate` internally. It validates or rebuilds V2 feature files, fetches props, game lines, probables, and generates predictions.
+**Preferred path:** run the full pipeline from the project root with `./run_daily.sh`. No manual `source .venv/bin/activate` is required — the script sources `.venv/bin/activate` internally. It validates or rebuilds V2 feature files, fetches props, game lines, probables, and generates predictions. Fetch control and skip flags are documented in [Cache-first data policy → Daily pipeline](#daily-pipeline-one-fetch-per-run).
 
 ```bash
 cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
@@ -891,22 +1271,26 @@ The board always shows **one row per (player, market)** — the book with the hi
 **Hint:** To compare prices across books for one player/market, open the **[player page](#player-pages-uplayerpy)** — it lists all books/lines per market with consensus line, devigged %, and best book/EV columns.
 
 - **Sidebar:** V1 / V2 model version selector; **[Pick Builder](#pick-builder-uipick_builderpy)** favorites slip
-- **Market type** (always visible): full-width multiselect at the top of the board — limits prop categories (Hits, **Batter Walks** / **Pitcher Walks** as distinct labels via [`ui/market_filters.py`](ui/market_filters.py)); synced with Top Over / Under previews
-- **Filters & columns** popover: minimum Edge / EV sliders and **Show columns** visibility only
-- **Filter by column** expander (above the table): labeled filters in a 3-column grid for every table column except Market — player text search, game/book multiselect, side, line/odds ranges, min Over % / Under % / Model % / Market % / Devigged % / L5–L10 % / Edge / Consensus Edge / EV / Best EV, etc.
+- **Market type** (always visible): full-width multiselect at the top — limits prop categories (Hits, **Batter Walks** / **Pitcher Walks** as distinct labels via [`ui/market_filters.py`](ui/market_filters.py)); synced with Top Over / Under previews
+- **Filters & columns** popover: minimum Edge / EV sliders and **Show columns** visibility
+- **Active filter chips:** when any filter is on, a summary row shows **Active filters:** with each constraint as a chip and a **Clear all filters** button
+- **Filter by column** expander: labeled filters in a 3-column grid for every table column except Market — player text search, game/book multiselect, side, line/odds ranges, min Over % / Under % / Model % / Market % / Devigged % / L5–L10 % / Edge / Consensus Edge / EV / Best EV, etc. Active filters show **subscript indices** (e.g. Line₂) matching the chip order
+- **Column header sort buttons:** click a header to sort (up to **3 columns** — first click descending, second click ascending, third click removes; subscript ₁₂₃ shows sort priority). **Clear sort** resets to EV descending. Headers also show filter subscripts when a column filter is active
+- **AND logic:** Market type, min Edge, min EV, and every column filter combine with **AND** — a row must pass all active filters
 - **Summary metrics:** Prop count, best edge, best EV, unique players (reflect Market / Edge / EV filters)
-- **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board — no separate market multiselect); links open full ranked list pages
-- **Sortable table:** **Sort by** selectbox and **Ascending** toggle above the table (outside the popover)
-- **Columns:** Player (link to detail page), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
+- **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); links to full lists and **[Version compare](#version-compare-v1--v2--v3--main)**
+- **Columns:** Player (link to detail page), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), **Pred #** and **Dist Over %** on pitcher K/walks (dual-head), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
 - **L5 / L10 %:** Share of the player's last 5 / 10 completed games where the stat strictly exceeded the posted line (from feature parquets via [`ui/player_stats.py`](ui/player_stats.py))
 
-See also: [Phase 2 dedupe](#phase-2-multi-bookmaker-intelligence) · [Batter Score](#batter-score)
+Board enrichment is **`@st.cache_data`** in [`app.py`](app.py), keyed on predictions CSV **mtime** — see [Cache-first → Streamlit caching](#zero-api-run-patterns).
+
+See also: [Phase 2 dedupe](#phase-2-multi-bookmaker-intelligence) · [Batter Score](#batter-score) · [Version compare](#version-compare-v1--v2--v3--main)
 
 ### Player pages (`ui/player.py`)
 
 Open by clicking a player name on the board (`?player=...`).
 
-- Game, first-pitch time, **[Batter Score](#batter-score)** breakdown (season baseline, recent form, matchup, pitcher form; SP ERA L5 / H2H when known), best edge / EV / prop count / market count
+- Game, first-pitch time, **[Batter Score](#batter-score)** breakdown (season baseline, recent form, matchup, pitcher form; SP ERA L5 / H2H when known), **✓ Batter Score validated** badge when [validation backtest](#8-validation-backtest-offline) gates pass, best edge / EV / prop count / market count
 - **Stat history** — market dropdown (all batter or pitcher markets on the player's slate), **L5 / L10** segmented toggle, rolling averages, Altair bar chart for last N games ([`ui/player_stats.py`](ui/player_stats.py)); caption **Game logs through YYYY-MM-DD** from max `game_date` in feature parquets
 - Batter Score section: H+TB+BB last-10 Altair chart (composite input stat)
 - **Per-market sections (all books):** every book/line for that player and market, plus consensus line caption and last-10-games chart for that market — this is where multi-book comparison lives (not on the main board)
@@ -921,6 +1305,10 @@ Same dedupe rule as the [main board](#main-board-apppy--uiboardpy): one best-EV 
 - **Top Under %** (`?view=top_under`): same, ranked by Under %; home-run unders excluded from the under list
 
 Board previews share the main board's Market / Edge / EV session state. Full list pages use independent filter state.
+
+### Version compare (`ui/version_compare.py`)
+
+Side-by-side **Over %** / **Under %** for V1, V2, V3, and Main — see [Quick start → Version Compare](#open-streamlit-and-version-compare) and [Version compare (reference)](#version-compare-v1--v2--v3--main).
 
 ---
 
@@ -984,7 +1372,15 @@ Fetches pre-game historical player props into `data/raw/odds/historical/date=YYY
 python scripts/backtest.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v2] [--min-edge 0.03] [--min-ev 0.05] [--market batter_hits]
 ```
 
-Scores historical props with trained models, joins Statcast outcomes from feature parquets, writes `data/backtest/backtest_{start}_{end}.csv`.
+Scores historical props with trained models, joins Statcast outcomes from feature parquets, writes `data/backtest/backtest_{start}_{end}.csv`. Offline-safe with `DISABLE_LIVE_FETCH=1` when historical odds and features exist on disk.
+
+### scripts/backtest_batter_score.py
+
+```bash
+python scripts/backtest_batter_score.py --start YYYY-MM-DD --end YYYY-MM-DD [--min-sample 100] [--min-spearman 0.15]
+```
+
+Validates Batter Score vs same-game H+TB+BB outcomes; writes `data/backtest/batter_score_validation.json` (drives the player-page **✓ Batter Score validated** flag). Does not affect board edge or ranking. **Offline-only** — see [§8 Validation backtest](#8-validation-backtest-offline) and [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls).
 
 ### build_features.py
 
@@ -1026,7 +1422,7 @@ Requires `data/processed/current_props.parquet` from `--props`. Output includes 
 streamlit run app.py
 ```
 
-Reads `predictions.csv` (V1) or `predictions_v2.csv` (V2) based on sidebar selection. See [Streamlit UI](#streamlit-ui).
+Reads `predictions.csv` (V1) or `predictions_v2.csv` (V2) based on sidebar selection. Enrichment is cache-first — see [Cache-first data policy → Streamlit caching](#zero-api-run-patterns). See [Streamlit UI](#streamlit-ui).
 
 ---
 
@@ -1117,20 +1513,24 @@ mlb-prop-model/
 
 ## Git
 
-Local git repo with annotated tags for frozen snapshots:
+Local git repo with annotated tags for frozen snapshots. Remote: **[EZ94PHEN0M52/MON3Y](https://github.com/EZ94PHEN0M52/MON3Y)** on GitHub (`origin`).
 
-| Tag | Snapshot folder | Contents |
-|-----|-----------------|----------|
-| `v2` | `mlb-prop-model-v2/` | Pre–Phases 1–6 baseline |
-| `v3` | `mlb-prop-model-v3/` | Phases 1–6 + Batter Score A–D + board filters + Pick Builder |
+| Tag | Snapshot folder | Commit (approx.) | Contents |
+|-----|-----------------|------------------|----------|
+| **`v1`** | `mlb-prop-model-v1/` | `c4c9f8e` | Pre–V2 rolling-form baseline |
+| **`v2`** | `mlb-prop-model-v2/` | `fec6236` | Pre–Phases 1–6 baseline |
+| **`v3`** | `mlb-prop-model-v3/` | `3de111a` | Phases 1–6 + Batter Score A–D + board filters + Pick Builder |
 
-Active development continues on **`main`** in `mlb-prop-model/`. Next work (dual-head pitcher models) is tracked in [docs/ROADMAP.md](docs/ROADMAP.md).
+Active development continues on **`main`** in `mlb-prop-model/`. Post-v3 work (dual-head pitcher K/walks, Batter Score validation, board UX) lands on **`main`** and is documented in [Changelog](#changelog) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ```bash
+git remote -v
 git status
 git log --oneline
-git tag -l
-git show v3 --no-patch   # v3 tag metadata
+git tag -l                  # v1, v2, v3
+git show v3 --no-patch      # v3 tag metadata
+git push origin main        # push active branch (when ready)
+git push origin --tags      # push all version tags
 ```
 
 Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
@@ -1164,6 +1564,9 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | `OUT_OF_USAGE_CREDITS` / quota exhausted | Odds API monthly credits used up. If `data/processed/current_props.parquet` exists, fetch keeps the cache and exits non-zero. Run `./run_daily.sh --skip-props` to skip the fetch and use cached props. |
 | Zero MLB events from `--props` | No games scheduled today, or API key/quota issue |
 | Pipeline or Streamlit accidentally suspended (**Ctrl+Z**) | Use **Ctrl+C** to stop cleanly. If suspended, run `jobs` then `kill %1` (or relevant job number) before re-running `./run_daily.sh`. Do not suspend mid `ensure_features.py --fix` — partial parquets may corrupt |
+| Version compare shows all **—** | Run [Quick start → Prepare all versions](#prepare-all-versions-for-version-compare); at minimum `./run_daily.sh` for V2/Main. Copy V3 CSV from `mlb-prop-model-v3/`. Run V1 `predict.py` when `models/v1/` exists |
+| Version compare **Generate missing predictions** does nothing | CSV may already exist, or `models/v1/` / `models/v2/` is empty — check **Version sources** expander on compare page |
+| Range filter shows "All values: X" instead of slider | Column has only one unique numeric value — expected; filter is a no-op until lines vary |
 
 See also: [Operational note — suspended jobs](#operational-note--suspended-jobs-and-long-running-pipeline-steps) in the changelog.
 
@@ -1176,6 +1579,82 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 ---
 
 ## Changelog
+
+### 2026-08-19 — Post-v3 board filter UX (AND combine, chips, header sort)
+
+**Context:** After the v3 snapshot, the main board needed clearer filter composition, visible active-state feedback, and faster multi-column sorting without a separate sort dropdown.
+
+**Added / changed:**
+- [`ui/board.py`](ui/board.py) — **Active filters** chip row with **Clear all filters**; Market + min Edge + min EV + column filters combine with **AND** logic; caption shows filtered row count
+- **Column header buttons** — click to sort up to **3 columns** (desc → asc → remove); subscript priority markers (₁₂₃) and ↑/↓ on headers; **Clear sort** toolbar
+- **Filter subscripts** on headers and in **Filter by column** panel labels — index matches chip order when multiple column filters are active
+- **Range filter slider fix** — when min equals max (single unique value), show caption instead of an invalid Streamlit slider
+- [`ui/glossary.py`](ui/glossary.py) — `header_click_help`, `header_click_sort` tooltips
+
+---
+
+### 2026-08-19 — Version compare board (V1 / V2 / V3 / Main)
+
+**Context:** Users needed one view to compare model **Over %** / **Under %** across project generations without switching model versions on the main board.
+
+**Added:**
+- [`ui/version_compare.py`](ui/version_compare.py) — side-by-side compare table (top 30 deduped props); **Version sources** expander; **Generate missing predictions** for V1/V2
+- [`utils.py`](utils.py) — `VERSION_COMPARE_SLOTS`, `compare_predictions_path()`, `version_has_models()`
+- [`app.py`](app.py) — routing via `?view=compare` and sidebar link; board link under Top Over / Under previews
+- Prediction files: `predictions.csv` (V1), `predictions_v2.csv` (V2/Main), `predictions_v3.csv` (manual copy from frozen v3)
+
+Documented in [Quick start → Version Compare](#open-streamlit-and-version-compare).
+
+---
+
+### 2026-08-19 — Cache-first data policy and `DISABLE_LIVE_FETCH`
+
+**Context:** Backtests, Streamlit reruns, and `predict.py` were at risk of accidental Odds API / Statcast calls, burning quota and slowing the UI.
+
+**Added:**
+- README [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls) — single source of truth under `data/raw/`, `data/processed/`, `data/predictions/`, `data/backtest/`
+- [`utils.py`](utils.py) — `live_fetch_disabled()`, `require_live_fetch()`; blocks fetch scripts and Statcast refresh when `DISABLE_LIVE_FETCH=1`
+- Zero-API run patterns for backtest, predict, and Streamlit; daily pipeline skip flags documented
+- [`app.py`](app.py) — `@st.cache_data` on board load keyed by predictions CSV **mtime**; [`ui/version_compare.py`](ui/version_compare.py) caches compare table by CSV mtimes
+
+---
+
+### 2026-08-19 — Dual-head pitcher K / walks (classifier + regressor)
+
+**Context:** Count props (strikeouts, walks) benefit from an expected-count view alongside the existing Over/Under classifier. Post-v3 architecture per [docs/ROADMAP.md](docs/ROADMAP.md).
+
+**Added:**
+- [`distributional.py`](distributional.py) — `DUAL_HEAD_MARKETS` (`pitcher_strikeouts`, `pitcher_walks`); Poisson regressor outputs `predicted_count`, `dist_over_probability`
+- [`scripts/fit_distributional.py`](scripts/fit_distributional.py) → `models/v2/dist/{market}.pkl`; [`./run_evaluation.sh`](#evaluation-pipeline-phase-6)
+- [`predict.py`](predict.py) — dual-head inference for K/walks only; **classifier remains source of truth for edge/EV**
+- Board columns **Pred #** and **Dist Over %**; [`scripts/test_distributional.py`](scripts/test_distributional.py)
+
+**Deferred:** 50/50 classifier+regressor probability blend for edge (Phase 2+ in ROADMAP).
+
+---
+
+### 2026-08-19 — Batter Score validation backtest + validated flag
+
+**Context:** Batter Score was shown on player pages but not validated against outcomes; board edge/ranking should stay unchanged until gates pass.
+
+**Added:**
+- [`scripts/backtest_batter_score.py`](scripts/backtest_batter_score.py) — point-in-time scoring vs same-game **H + TB + BB**; Spearman ρ ≥ 0.15 and n ≥ 100 gates
+- [`batter_score_data.py`](batter_score_data.py) — `load_batter_score_validation()`, `is_batter_score_validated()`; auto-sets `DISABLE_LIVE_FETCH=1`
+- [`ui/batter_score.py`](ui/batter_score.py) — player page **✓ Batter Score validated** when `data/backtest/batter_score_validation.json` has `"validated": true`
+- Board edge/ranking **unchanged** until explicit future wiring
+
+---
+
+### 2026-08-19 — GitHub MON3Y remote and `v1` tag
+
+**Context:** Full v3 snapshot needed a remote backup; all three generation tags should be fetchable from GitHub.
+
+**Changes:**
+- Remote **`origin`** → [https://github.com/EZ94PHEN0M52/MON3Y](https://github.com/EZ94PHEN0M52/MON3Y); **`main`** and tags pushed
+- Annotated tags **`v1`** (`c4c9f8e`), **`v2`** (`fec6236`), **`v3`** (`3de111a`) on GitHub
+- Commit **`3de111a`** — `v3: full MLB prop model snapshot` (code + docs; `.env` / `data/` / `models/` remain local/gitignored)
+
+---
 
 ### 2026-08-19 — v3 git tag and frozen snapshot (`mlb-prop-model-v3/`)
 

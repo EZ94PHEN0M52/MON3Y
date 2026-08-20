@@ -28,6 +28,17 @@ GLOSSARY = {
         "fit on held-out historical outcomes. Edge and EV use this value "
         "when calibrators exist in models/v2/calibrators/."
     ),
+    "predicted_count": (
+        "Expected stat count (μ) from the Poisson regressor head for "
+        "pitcher strikeouts and walks. Shown alongside the classifier "
+        "Over % / Under %; edge and EV still use the classifier path in "
+        "Phase 1 (50/50 blend deferred to a later iteration)."
+    ),
+    "dist_over_probability": (
+        "Poisson regressor P(stat > line) for pitcher strikeouts and walks. "
+        "Derived from Pred # and the posted line. Visible for comparison "
+        "with classifier Over %; not used for edge or EV in Phase 1."
+    ),
     "over_pct": (
         "Model probability that the player exceeds the posted line "
         "(stat > line). Computed once per player, market, book, and line — "
@@ -184,15 +195,16 @@ GLOSSARY = {
         "at the top of the board."
     ),
     "header_click_help": (
-        "Use **Market type** at the top to limit prop categories (e.g. Hits, "
-        "Batter Walks, Pitcher Walks). Use **Sort by** and **Ascending** to "
-        "order the table. Open **Filter by column** to narrow rows by player, "
-        "game, book, side, line, odds, probabilities, L5/L10 %, Batter Score, "
-        "edge, EV, line movement, or steam. Open **Filters & columns** for "
+        "Click a **column header** to sort (up to 3 columns — first clicked "
+        "is primary, shown as subscript ₁, then ₂, ₃). Click again to reverse "
+        "direction (↑↓). Active column filters show a subscript in "
+        "**Filter by column** (₁ = first active filter). Use **Market type** "
+        "at the top for prop categories. Open **Filters & columns** for "
         "minimum Edge / EV and column visibility."
     ),
     "header_click_sort": (
-        "Click to sort by this column. Click again to reverse sort direction."
+        "Click to add or toggle sort for this column. Up to 3 sort keys; "
+        "first clicked has priority ₁."
     ),
     "header_click_filter": (
         "Open filter controls for this column."
@@ -265,6 +277,13 @@ GLOSSARY = {
         "Phase D pitch-type data is unavailable. Active weights renormalize "
         "to 100%; partial scores are not directly comparable to full scores "
         "without context."
+    ),
+    "batter_score_validated": (
+        "Shown when a historical backtest (`scripts/backtest_batter_score.py`) "
+        "passes configured gates (minimum sample size + Spearman correlation "
+        "vs same-game H+TB+BB outcomes). Indicates the composite tracks real "
+        "production modestly; it does **not** mean Batter Score drives board "
+        "edge or EV until explicitly wired in."
     ),
     "filter_batter_score": (
         "Show props where Batter Score is at least this value (0–100)."

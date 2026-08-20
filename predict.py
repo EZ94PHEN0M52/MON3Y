@@ -20,6 +20,7 @@ from prop_scoring import (
 from distributional import (
     load_distributional_model,
     market_supports_distributional,
+    market_supports_dual_head,
     score_distributional_prop,
 )
 from utils import (
@@ -244,16 +245,26 @@ def generate_predictions(
                     row,
                     dist_package,
                 )
-                scores[
-                    "dist_over_probability"
-                ] = dist_scores[
-                    "over_probability"
-                ]
-                scores[
-                    "predicted_rate"
-                ] = dist_scores[
-                    "predicted_rate"
-                ]
+
+                if market_supports_dual_head(
+                    market
+                ):
+                    scores[
+                        "predicted_count"
+                    ] = dist_scores[
+                        "predicted_count"
+                    ]
+                    scores[
+                        "dist_over_probability"
+                    ] = dist_scores[
+                        "over_probability"
+                    ]
+                else:
+                    scores[
+                        "predicted_rate"
+                    ] = dist_scores[
+                        "predicted_count"
+                    ]
 
         predictions.append({
 
@@ -387,11 +398,18 @@ def generate_predictions(
         "line_delta",
         "odds_delta",
         "steam_flag",
+        "predicted_count",
+        "dist_over_probability",
+        "predicted_rate",
     ]
 
     print(
         result[
-            display_columns
+            [
+                column
+                for column in display_columns
+                if column in result.columns
+            ]
         ]
         .head(25)
         .to_string(

@@ -23,6 +23,7 @@ from utils import (
     MLB_SPORT,
     historical_game_lines_path,
     historical_odds_path,
+    require_live_fetch,
 )
 
 
@@ -207,6 +208,9 @@ def fetch_historical_props(
     force=False,
     dry_run=False,
 ):
+    if not dry_run:
+        require_live_fetch("historical Odds API props")
+
     if not ODDS_API_KEY:
         raise RuntimeError(
             "ODDS_API_KEY is missing "
@@ -371,6 +375,9 @@ def fetch_historical_game_lines(
     force=False,
     dry_run=False,
 ):
+    if not dry_run:
+        require_live_fetch("historical Odds API game lines")
+
     if not ODDS_API_KEY:
         raise RuntimeError(
             "ODDS_API_KEY is missing "

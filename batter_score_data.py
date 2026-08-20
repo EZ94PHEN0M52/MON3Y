@@ -5,12 +5,24 @@ Phase B adds opposing SP ERA (L5), optional H2H blend, and game-context
 gating via daily_probables.parquet.
 
 Orthogonal to LightGBM prop models — used for UI ranking and player context.
+
+Cache-first policy (no redundant live API calls):
+  - Game logs, rolling stats: data/processed/*_features_*.parquet only
+  - H2H + pitch arsenal (Phase D): data/raw/statcast_*.parquet (read once,
+    @lru_cache on _load_latest_statcast)
+  - Probable SP lookup: data/processed/daily_probables.parquet
+  - Never calls pybaseball.statcast(), Odds API, or MLB Stats API directly.
+  - Set DISABLE_LIVE_FETCH=1 to block accidental fetches in shared helpers
+    (odds_api, fetch_data, fetch_probables) during backtests/offline runs.
 """
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -38,7 +50,11 @@ from ui.player_stats import (
     _player_key,
     find_latest_feature_path,
 )
-from utils import RAW_DIR, coerce_mlb_id
+from utils import (
+    BATTER_SCORE_VALIDATION_PATH,
+    RAW_DIR,
+    coerce_mlb_id,
+)
 
 
 BATTER_SCORE_COLUMNS = [
@@ -336,19 +352,19 @@ def build_game_context(
     }
 
 
-def build_batter_inputs(
-    player_name: str,
-    version: str = "v2",
-    game_context: Optional[dict] = None,
-) -> Optional[BatterInputs]:
-    """
-    Construct BatterInputs from the latest batter feature parquet.
+def _normalize_game_date(value) -> str:
+    return str(pd.to_datetime(value).strftime("%Y-%m-%d"))
 
-    When *game_context* is supplied, Phase B SP / H2H fields are populated.
-    Returns None when the player is missing or has fewer than 10 games.
-    """
-    player_rows = _batter_rows(player_name, version=version)
-    if player_rows is None:
+
+def build_batter_inputs_from_rows(
+    player_rows: pd.DataFrame,
+    *,
+    display_name: Optional[str] = None,
+    game_context: Optional[dict] = None,
+    version: str = "v2",
+) -> Optional[BatterInputs]:
+    """Construct BatterInputs from a pre-filtered game-log dataframe."""
+    if player_rows is None or player_rows.empty:
         return None
 
     required = {"hits", "total_bases", "walks", "game_date"}
@@ -362,9 +378,13 @@ def build_batter_inputs(
     season_avg = float(raw_points.mean())
     game_log = _rows_to_game_log(player_rows)
 
-    display_name = str(
-        player_rows["player_name"].iloc[-1]
-    ).strip()
+    if display_name is None:
+        if "player_name" in player_rows.columns:
+            display_name = str(
+                player_rows["player_name"].iloc[-1]
+            ).strip()
+        else:
+            display_name = ""
 
     latest = player_rows.sort_values("game_date").iloc[-1]
     batter_team = latest.get("team")
@@ -410,7 +430,7 @@ def build_batter_inputs(
             team_proxy = _team_opp_earned_runs_proxy(player_rows)
 
     return BatterInputs(
-        name=display_name or str(player_name).strip(),
+        name=display_name or "Unknown",
         season_avg_raw_points=season_avg,
         game_log=game_log,
         opponent_pitcher_arsenal=opponent_arsenal,
@@ -419,6 +439,139 @@ def build_batter_inputs(
         h2h_pa=h2h_pa,
         h2h_avg_raw_points=h2h_avg_raw_points,
         team_opp_earned_runs_proxy=team_proxy,
+    )
+
+
+def build_batter_inputs_as_of(
+    player_rows: pd.DataFrame,
+    target_date: str,
+    *,
+    game_context: Optional[dict] = None,
+    version: str = "v2",
+) -> Optional[BatterInputs]:
+    """
+    Point-in-time BatterInputs using only games strictly before *target_date*.
+
+    Used by the validation backtest to avoid lookahead in season/form features.
+    """
+    if player_rows is None or player_rows.empty:
+        return None
+
+    target = _normalize_game_date(target_date)
+    dated = player_rows.copy()
+    dated["game_date"] = dated["game_date"].map(_normalize_game_date)
+    prior = dated[dated["game_date"].lt(target)].copy()
+
+    display_name = None
+    if "player_name" in player_rows.columns:
+        display_name = str(player_rows["player_name"].iloc[-1]).strip()
+
+    return build_batter_inputs_from_rows(
+        prior,
+        display_name=display_name,
+        game_context=game_context,
+        version=version,
+    )
+
+
+def actual_raw_points_on_date(
+    player_rows: pd.DataFrame,
+    target_date: str,
+) -> Optional[float]:
+    """H+TB+BB composite outcome for *target_date* (validation target stat)."""
+    if player_rows is None or player_rows.empty:
+        return None
+
+    target = _normalize_game_date(target_date)
+    dated = player_rows.copy()
+    dated["game_date"] = dated["game_date"].map(_normalize_game_date)
+    day_rows = dated[dated["game_date"].eq(target)]
+
+    if day_rows.empty:
+        return None
+
+    return float(_raw_points_row(day_rows.iloc[0]))
+
+
+def score_batter_as_of(
+    player_rows: pd.DataFrame,
+    target_date: str,
+    *,
+    game_context: Optional[dict] = None,
+    version: str = "v2",
+) -> Optional[BatterScoreResult]:
+    """Compute Batter Score from pre-game history only (backtest-safe)."""
+    batter = build_batter_inputs_as_of(
+        player_rows,
+        target_date,
+        game_context=game_context,
+        version=version,
+    )
+    if batter is None:
+        return None
+
+    sp_named = bool(batter.opposing_sp_name and game_context is not None)
+    sp_ready = sp_named and batter.opponent_pitcher_era_l5 is not None
+    matchup_ready = (
+        sp_ready
+        and arsenal_ready(batter.opponent_pitcher_arsenal)
+    )
+
+    try:
+        if matchup_ready:
+            return compute_batter_score_phase_d(
+                batter,
+                gates=PHASE_D_GATES,
+            )
+
+        if sp_ready:
+            return compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+            )
+
+        if (
+            USE_TEAM_PITCHING_PROXY
+            and batter.team_opp_earned_runs_proxy is not None
+            and game_context is not None
+            and not sp_named
+        ):
+            return compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                sp_tbd=True,
+                team_proxy=True,
+            )
+
+        return compute_batter_score_partial(
+            batter,
+            gates=PHASE_A_GATES,
+            sp_tbd=game_context is not None and not sp_named,
+        )
+    except ValueError:
+        return None
+
+
+def build_batter_inputs(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Optional[BatterInputs]:
+    """
+    Construct BatterInputs from the latest batter feature parquet.
+
+    When *game_context* is supplied, Phase B SP / H2H fields are populated.
+    Returns None when the player is missing or has fewer than 10 games.
+    """
+    player_rows = _batter_rows(player_name, version=version)
+    if player_rows is None:
+        return None
+
+    return build_batter_inputs_from_rows(
+        player_rows,
+        display_name=str(player_name).strip(),
+        game_context=game_context,
+        version=version,
     )
 
 
@@ -674,3 +827,74 @@ def get_batter_score_game_log(
     )
 
     return recent.set_index("game_label")[["raw_points"]]
+
+
+_EMPTY_VALIDATION: Dict[str, Any] = {
+    "validated": False,
+    "sample_size": 0,
+    "pearson_correlation": None,
+    "spearman_correlation": None,
+    "mae_implied_raw_points": None,
+    "date_range": None,
+    "criteria_used": {},
+    "thresholds": {},
+    "timestamp": None,
+}
+
+
+@lru_cache(maxsize=1)
+def load_batter_score_validation() -> Dict[str, Any]:
+    """Read cached Batter Score validation JSON (empty dict if missing)."""
+    return _read_batter_score_validation_file(
+        BATTER_SCORE_VALIDATION_PATH,
+    )
+
+
+def _read_batter_score_validation_file(
+    path: Path,
+) -> Dict[str, Any]:
+    if not path.exists():
+        return dict(_EMPTY_VALIDATION)
+
+    try:
+        with path.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return dict(_EMPTY_VALIDATION)
+
+    if not isinstance(payload, dict):
+        return dict(_EMPTY_VALIDATION)
+
+    merged = dict(_EMPTY_VALIDATION)
+    merged.update(payload)
+    return merged
+
+
+def clear_batter_score_validation_cache() -> None:
+    """Invalidate cached validation payload (for tests)."""
+    load_batter_score_validation.cache_clear()
+
+
+def is_batter_score_validated() -> bool:
+    """True when the latest backtest passed configured validation gates."""
+    return bool(
+        load_batter_score_validation().get("validated", False)
+    )
+
+
+def write_batter_score_validation(payload: Dict[str, Any]) -> Path:
+    """Persist validation results and refresh the loader cache."""
+    BATTER_SCORE_VALIDATION_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with BATTER_SCORE_VALIDATION_PATH.open(
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+    clear_batter_score_validation_cache()
+    return BATTER_SCORE_VALIDATION_PATH

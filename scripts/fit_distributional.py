@@ -1,8 +1,8 @@
 """
-Train Poisson rate models for distributional prop scoring (Phase 6).
+Train Poisson rate models for distributional prop scoring (Phase 6 / Phase 1).
 
-Saves models to models/{version}/dist/{market}.pkl for batter_hits and
-pitcher_strikeouts.
+Saves models to models/{version}/dist/{market}.pkl for batter_hits,
+pitcher_strikeouts, and pitcher_walks.
 """
 
 import argparse

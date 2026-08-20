@@ -16,6 +16,10 @@
 # Optional cron on game days (every 2–4 hours), e.g.:
 #   0 8,12,16,20 * * * cd /path/to/mlb-prop-model && .venv/bin/python fetch_data.py --props >> logs/props_fetch.log 2>&1
 #
+# Distributional / dual-head regressor models (Phase 1): fit via
+# ./run_evaluation.sh (not run on every daily pass). After fitting,
+# run_daily.sh picks up models/v2/dist/*.pkl at predict time.
+#
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

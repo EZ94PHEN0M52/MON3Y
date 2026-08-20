@@ -21,7 +21,7 @@ The completed Phases 1–6 roadmap (historical odds, multi-book intelligence, ca
 |-------|------------|-------|
 | Odds API / board / scoring (`odds_api.py`, `prop_scoring.py`, `ui/market_filters.py`) | `pitcher_strikeouts` | `pitcher_walks` |
 | Training stat columns (`train.py` `PITCHER_MARKETS`) | `strikeouts` → saves `pitcher_strikeouts.pkl` | `walks` → saves `pitcher_walks.pkl` |
-| Distributional Poisson (`distributional.py`) | `pitcher_strikeouts` (existing POC) | *not yet* — dual-head regressor replaces for v1 |
+| Distributional Poisson (`distributional.py`) | `pitcher_strikeouts` | `pitcher_walks` |
 
 **Out of v1 scope:** `pitcher_earned_runs` (and ER with projected innings) — deferred until count markets are stable.
 
@@ -31,21 +31,27 @@ The completed Phases 1–6 roadmap (historical odds, multi-book intelligence, ca
 
 **Goal:** Ship a minimal dual-head pipeline for pitcher K and walks without the heavier feedback-loop or nightly retrain machinery.
 
+**Status (Aug 2026):** Core dual-head inference shipped for `pitcher_strikeouts` and `pitcher_walks`. Classifier remains the source of truth for edge/EV; regressor outputs (`predicted_count`, `dist_over_probability`) are visible on the board. **50/50 probability blend deferred** to Phase 2+ (see composite retrain item below).
+
 ### Modeling
 
-- Per market (`pitcher_strikeouts`, `pitcher_walks`):
-  - **Classifier head** — P(actual > line) for the posted book line
-  - **Regressor head** — expected count (μ) for the same feature row
-- **Composite inference (v1):** equal **50/50** blend of classifier probability and regressor-derived over probability (Poisson or distributional mapping from μ to P(over))
-- Training stays on existing feature parquets and real-book lines (Phase 3 path); no new outcome log or nightly retrain yet
+| Item | Status |
+|------|--------|
+| Classifier head (P(actual > line)) — unchanged | **Done** |
+| Poisson regressor head (expected count μ) — `fit_distributional.py` → `models/v2/dist/{market}.pkl` | **Done** |
+| Dual-head inference in `predict.py` (`DUAL_HEAD_MARKETS`) | **Done** |
+| 50/50 blend of classifier + regressor over probability for edge | **Deferred** (Phase 2+) |
+| Training on existing feature parquets / real-book lines | **Done** (no outcome log or nightly retrain) |
 
 ### Board & UI
 
-- Extend board columns to surface dual-head outputs where useful, e.g.:
-  - `model_probability` / `calibrated_probability` (classifier path)
-  - Expected count (regressor μ)
-  - Blended over probability used for edge (50/50 v1)
-- **Markets in scope for edge/ranking:** `pitcher_strikeouts`, `pitcher_walks` under the new heads; other markets unchanged until expanded in Phase 2+
+| Item | Status |
+|------|--------|
+| `model_probability` / `calibrated_probability` (classifier path) | **Done** (unchanged) |
+| `predicted_count` (regressor μ, 1 decimal) | **Done** |
+| `dist_over_probability` (Poisson P(over) from μ + line) | **Done** |
+| Edge / EV from classifier path only (Phase 1) | **Done** |
+| **Markets in scope:** `pitcher_strikeouts`, `pitcher_walks`; other markets unchanged | **Done** |
 
 ### Batter Score (validation track)
 
@@ -57,18 +63,35 @@ Batter Score remains **orthogonal** to LightGBM prop models but is **not** wired
 | Player page | Show Batter Score summary as today; add **`batter_score_validated`** flag once criteria met |
 | Validation | Run in parallel — does not block dual-head pitcher work |
 
-#### Batter Score validation criteria (TBD)
+#### Batter Score validation criteria
 
-Placeholder gates — numbers and scripts to be finalized before flipping the flag:
+Run the dedicated backtest (parallel to prop-model `scripts/backtest.py`):
 
-| Criterion | Placeholder | Status |
-|-----------|-------------|--------|
-| Backtest script | `scripts/backtest.py` extended or dedicated Batter Score backtest | TBD |
-| Minimum sample size | e.g. ≥ N batter-game rows with score + outcome | TBD |
-| Correlation / calibration | e.g. score decile vs hit-rate monotonicity; correlation threshold | TBD |
-| Holdout period | e.g. last K weeks out-of-sample | TBD |
+```bash
+python scripts/backtest_batter_score.py --start YYYY-MM-DD --end YYYY-MM-DD
+```
 
-When all criteria pass, set `batter_score_validated = true` in config or feature metadata and expose on the player page; only then consider Batter Score in edge/ranking UX.
+**Outcome target:** same-game **H + TB + BB** raw points (the stat Batter Score is built from).
+
+**Scoring method:** point-in-time — season/form features use only games **strictly before** each evaluation date (no lookahead). Historical SP/matchup context is omitted unless probables exist for that date; most backtest rows are **Form only** (Phase A).
+
+**Primary metric — Spearman ρ:** Batter Score is a ranked 0–100 composite with letter-grade thresholds; Spearman captures monotonic ordering vs outcomes without assuming linearity. Pearson *r* is reported for reference.
+
+| Criterion | Default | CLI flag |
+|-----------|---------|----------|
+| Minimum sample size | ≥ 100 batter-game rows | `--min-sample` |
+| Spearman correlation | ≥ 0.15 | `--min-spearman` |
+
+When both gates pass, `data/backtest/batter_score_validation.json` sets `"validated": true`. The player page shows **✓ Batter Score validated** via `is_batter_score_validated()` — board edge/ranking remain unchanged until a separate UX decision.
+
+Optional per-row detail: `--write-detail` → `batter_score_validation_detail.parquet`.
+
+| Item | Status |
+|------|--------|
+| Backtest script | `scripts/backtest_batter_score.py` |
+| Validation loader | `load_batter_score_validation()` / `is_batter_score_validated()` in `batter_score_data.py` |
+| Player-page flag | `ui/batter_score.py` |
+| Board edge / ranking | **Excluded** until validated + explicit wiring |
 
 ---
 
@@ -91,11 +114,11 @@ Heavier items intentionally **not** in Phase 1:
 
 ## Implementation order (suggested)
 
-1. Dual-head train/infer for `pitcher_strikeouts` and `pitcher_walks` (50/50 blend)
-2. Board columns + edge from blended probability
-3. Batter Score backtest harness + validation criteria doc update
-4. Flip `batter_score_validated` when gates pass
-5. Phase 2+ items as capacity allows
+1. ~~Dual-head train/infer for `pitcher_strikeouts` and `pitcher_walks`~~ **Done** (classifier + regressor; blend deferred)
+2. ~~Board columns for dual-head outputs~~ **Done** (`predicted_count`, `dist_over_probability`)
+3. ~~Batter Score backtest harness + validation criteria doc update~~ **Done** (`scripts/backtest_batter_score.py`)
+4. Flip `batter_score_validated` when gates pass (run backtest; JSON flag drives player page)
+5. Phase 2+ items as capacity allows (50/50 blend, 65/35 retrain, outcomes log, etc.)
 
 ---
 
