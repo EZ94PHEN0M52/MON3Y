@@ -1050,8 +1050,7 @@ def _render_probability_rankings(filtered, key_prefix):
     )
 
     over_top = _top_props_by_probability(ranking_df, "over_probability")
-    under_filtered = ranking_df[ranking_df["market"] != "batter_home_runs"]
-    under_top = _top_props_by_probability(under_filtered, "under_probability")
+    under_top = _top_props_by_probability(ranking_df, "under_probability")
 
     link_row = st.container(horizontal=True)
     with link_row:

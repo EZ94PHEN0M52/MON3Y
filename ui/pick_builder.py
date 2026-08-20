@@ -13,6 +13,7 @@ from ui.formatting import (
     market_label,
 )
 from ui.glossary import GLOSSARY
+from ui.market_filters import EXCLUDED_UI_MARKETS
 from ui.player_stats import BATTER_MARKETS
 
 PICKS_STATE_KEY = "pick_builder_picks"
@@ -39,12 +40,15 @@ def _init_picks():
 
 def get_picks() -> list[dict]:
     _init_picks()
-    return list(st.session_state[PICKS_STATE_KEY].values())
+    return [
+        pick
+        for pick in st.session_state[PICKS_STATE_KEY].values()
+        if pick.get("market") not in EXCLUDED_UI_MARKETS
+    ]
 
 
 def pick_count() -> int:
-    _init_picks()
-    return len(st.session_state[PICKS_STATE_KEY])
+    return len(get_picks())
 
 
 def row_to_pick(row: pd.Series) -> dict:

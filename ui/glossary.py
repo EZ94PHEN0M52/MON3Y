@@ -232,9 +232,9 @@ GLOSSARY = {
         "player and market — use **Market type** to narrow the list."
     ),
     "top_under_list": (
-        "All props ranked by model Under % (highest to lowest), excluding "
-        "home run markets. Uses the same Market / Edge / EV filters as the "
-        "main board. One best book per player and market."
+        "All props ranked by model Under % (highest to lowest). Uses the same "
+        "Market / Edge / EV filters as the main board. One best book per "
+        "player and market."
     ),
     "batter_score": (
         "Composite 0–100 rating for a batter's upcoming game. **Phase D** "

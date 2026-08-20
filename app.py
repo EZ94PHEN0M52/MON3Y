@@ -8,6 +8,7 @@ from ui.top_lists import render_top_over_page, render_top_under_page
 from ui.version_compare import render_version_compare_page
 from batter_score_data import enrich_with_batter_score
 from ui.formatting import compare_view_path, enrich_with_over_under_probs
+from ui.market_filters import exclude_ui_markets
 from ui.player_stats import enrich_with_l5_l10_pct
 from utils import predictions_path
 
@@ -50,7 +51,7 @@ def load_board_data(version, predictions_mtime):
     Enrichment reads feature/probables/statcast parquets only (no live APIs).
     """
     _ = predictions_mtime
-    predictions = load_predictions(version)
+    predictions = exclude_ui_markets(load_predictions(version))
     return enrich_with_batter_score(
         enrich_with_l5_l10_pct(
             enrich_with_over_under_probs(predictions),

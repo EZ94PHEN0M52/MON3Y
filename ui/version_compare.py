@@ -12,6 +12,7 @@ from ui.formatting import (
     format_pct,
     market_label,
 )
+from ui.market_filters import exclude_ui_markets
 from ui.player import render_back_to_board
 from utils import (
     VERSION_COMPARE_SLOTS,
@@ -22,6 +23,8 @@ from utils import (
 TOP_N = 30
 PREDICT_START = "2026-03-25"
 PREDICT_END = "2026-08-16"
+_GEN_BUTTON_KEY = "version_compare_generate_missing"
+_GEN_FEEDBACK_KEY = "version_compare_gen_feedback"
 
 MERGE_KEYS = ("player", "market")
 
@@ -49,7 +52,7 @@ def _load_slot_csv(slot_key: str) -> pd.DataFrame | None:
     if not path.exists():
         return None
 
-    df = pd.read_csv(path)
+    df = exclude_ui_markets(pd.read_csv(path))
     if df.empty:
         return None
 
@@ -247,7 +250,7 @@ def _slot_availability() -> list[dict]:
 
 
 def _generate_missing_predictions() -> list[str]:
-    """Run predict.py for missing CSVs. V3 is manual; Main shares V2's file."""
+    """Run predict for missing CSVs. V3 is manual; Main shares V2's file."""
     generated = []
     seen_paths: set[str] = set()
 
@@ -274,6 +277,47 @@ def _generate_missing_predictions() -> list[str]:
         seen_paths.add(path_key)
 
     return generated
+
+
+def _set_generate_feedback(level: str, message: str) -> None:
+    st.session_state[_GEN_FEEDBACK_KEY] = (level, message)
+
+
+def _render_generate_feedback() -> None:
+    feedback = st.session_state.pop(_GEN_FEEDBACK_KEY, None)
+    if not feedback:
+        return
+
+    level, message = feedback
+    if level == "success":
+        st.success(message)
+    elif level == "warning":
+        st.warning(message)
+    else:
+        st.error(message)
+
+
+def _on_generate_missing_predictions() -> None:
+    try:
+        generated = _generate_missing_predictions()
+        load_version_compare_table.clear()
+        if generated:
+            _set_generate_feedback(
+                "success",
+                "Generated predictions for: " + ", ".join(generated),
+            )
+        else:
+            _set_generate_feedback(
+                "warning",
+                "Nothing generated — files may already exist or models "
+                "are missing (see Version sources).",
+            )
+    except Exception as exc:
+        load_version_compare_table.clear()
+        _set_generate_feedback(
+            "error",
+            f"Failed to generate predictions: {exc}",
+        )
 
 
 @st.cache_data(show_spinner="Loading version comparison…")
@@ -344,28 +388,21 @@ def render_version_compare_page():
 
     action_row = st.container(horizontal=True)
     with action_row:
-        if st.button(
+        generate_clicked = st.button(
             "Generate missing predictions",
             type="primary",
+            key=_GEN_BUTTON_KEY,
             help=(
                 "Run predict.py for V1 and/or V2 when CSVs are missing and "
                 "models exist. V3 is not auto-generated."
             ),
-        ):
-            with st.spinner("Running predict for missing versions…"):
-                generated = _generate_missing_predictions()
-            load_version_compare_table.clear()
-            if generated:
-                st.success(
-                    "Generated predictions for: "
-                    + ", ".join(generated)
-                )
-            else:
-                st.warning(
-                    "Nothing generated — files may already exist or models "
-                    "are missing (see Version sources)."
-                )
-            st.rerun()
+        )
+
+    if generate_clicked:
+        with st.spinner("Running predict for missing versions…"):
+            _on_generate_missing_predictions()
+
+    _render_generate_feedback()
 
     compare_df = load_version_compare_table(_compare_cache_key())
 

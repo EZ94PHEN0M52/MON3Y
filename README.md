@@ -1268,21 +1268,23 @@ Requires V1 feature files and models in `models/v1/`.
 
 All markets below are fetched from The Odds API (`odds_api.py` `PROP_MARKETS`), trained in `train.py`, and scored in `predict.py` / `prop_scoring.py` (`MODEL_MAP`).
 
-| Odds API market | Display name | Model file | Role |
-|-----------------|--------------|------------|------|
-| `batter_hits` | Hits | `batter_hits.pkl` | Batter |
-| `batter_home_runs` | Home Runs | `batter_home_runs.pkl` | Batter |
-| `batter_total_bases` | Total Bases | `batter_total_bases.pkl` | Batter |
-| `batter_rbis` | RBIs | `batter_rbi.pkl` | Batter |
-| `batter_runs_scored` | Runs | `batter_runs.pkl` | Batter |
-| `batter_walks` | Walks | `batter_walks.pkl` | Batter |
-| `batter_hits_runs_rbis` | Hits + Runs + RBIs | `batter_hits_runs_rbis.pkl` | Batter |
-| `batter_stolen_bases` | Stolen Bases | `batter_stolen_bases.pkl` | Batter |
-| `pitcher_strikeouts` | Strikeouts | `pitcher_strikeouts.pkl` | Pitcher |
-| `pitcher_walks` | Walks | `pitcher_walks.pkl` | Pitcher |
-| `pitcher_hits_allowed` | Hits Allowed | `pitcher_hits_allowed.pkl` | Pitcher |
-| `pitcher_outs` | Pitcher Outs | `pitcher_outs.pkl` | Pitcher |
-| `pitcher_earned_runs` | Earned Runs | `pitcher_earned_runs.pkl` | Pitcher |
+**UI note:** `batter_home_runs` is still trained and written to prediction CSVs, but is **hidden from Streamlit** via `EXCLUDED_UI_MARKETS` in [`ui/market_filters.py`](ui/market_filters.py) (board, player pages, top lists, version compare, Pick Builder).
+
+| Odds API market | Display name | Model file | Role | UI |
+|-----------------|--------------|------------|------|-----|
+| `batter_hits` | Hits | `batter_hits.pkl` | Batter | shown |
+| `batter_home_runs` | Home Runs | `batter_home_runs.pkl` | Batter | hidden |
+| `batter_total_bases` | Total Bases | `batter_total_bases.pkl` | Batter | shown |
+| `batter_rbis` | RBIs | `batter_rbi.pkl` | Batter | shown |
+| `batter_runs_scored` | Runs | `batter_runs.pkl` | Batter | shown |
+| `batter_walks` | Walks | `batter_walks.pkl` | Batter | shown |
+| `batter_hits_runs_rbis` | Hits + Runs + RBIs | `batter_hits_runs_rbis.pkl` | Batter | shown |
+| `batter_stolen_bases` | Stolen Bases | `batter_stolen_bases.pkl` | Batter | shown |
+| `pitcher_strikeouts` | Strikeouts | `pitcher_strikeouts.pkl` | Pitcher | shown |
+| `pitcher_walks` | Walks | `pitcher_walks.pkl` | Pitcher | shown |
+| `pitcher_hits_allowed` | Hits Allowed | `pitcher_hits_allowed.pkl` | Pitcher | shown |
+| `pitcher_outs` | Pitcher Outs | `pitcher_outs.pkl` | Pitcher | shown |
+| `pitcher_earned_runs` | Earned Runs | `pitcher_earned_runs.pkl` | Pitcher | shown |
 
 **Training lines** (`train.py`):
 
@@ -1314,7 +1316,7 @@ The board always shows **one row per (player, market)** — the book with the hi
 **Hint:** To compare prices across books for one player/market, open the **[player page](#player-pages-uplayerpy)** — it lists all books/lines per market with consensus line, devigged %, and best book/EV columns.
 
 - **Sidebar:** V1 / V2 model version selector; **[Pick Builder](#pick-builder-uipick_builderpy)** favorites slip
-- **Market type** (always visible): full-width multiselect at the top — limits prop categories (Hits, **Batter Walks** / **Pitcher Walks** as distinct labels via [`ui/market_filters.py`](ui/market_filters.py)); synced with Top Over / Under previews
+- **Market type** (always visible): full-width multiselect at the top — limits prop categories (Hits, **Batter Walks** / **Pitcher Walks** as distinct labels via [`ui/market_filters.py`](ui/market_filters.py)); synced with Top Over / Under previews. Home run props are excluded from the UI (`EXCLUDED_UI_MARKETS`).
 - **Filters & columns** popover: minimum Edge / EV sliders and **Show columns** visibility
 - **Active filter chips:** when any filter is on, a summary row shows **Active filters:** with each constraint as a chip and a **Clear all filters** button
 - **Filter by column** expander: labeled filters in a 3-column grid for every table column except Market — player text search, game/book multiselect, side, line/odds ranges, min Over % / Under % / Model % / Market % / Devigged % / L5–L10 % / Edge / Consensus Edge / EV / Best EV, etc. Active filters show **subscript indices** (e.g. Line₂) matching the chip order
@@ -1345,7 +1347,7 @@ Open by clicking a player name on the board (`?player=...`).
 Same dedupe rule as the [main board](#main-board-apppy--uiboardpy): one best-EV row per `(player, market)` via [`dedupe_best_prop()`](odds_aggregation.py). See [Phase 2 dedupe](#phase-2-multi-bookmaker-intelligence).
 
 - **Top Over %** (`?view=top_over`): full table ranked by Over %; Market / Edge / EV filters via [`apply_top_level_filters()`](ui/board.py) (uses [`ui/market_filters.py`](ui/market_filters.py) for distinct walk labels)
-- **Top Under %** (`?view=top_under`): same, ranked by Under %; home-run unders excluded from the under list
+- **Top Under %** (`?view=top_under`): same, ranked by Under %
 
 Board previews share the main board's Market / Edge / EV session state. Full list pages use independent filter state.
 

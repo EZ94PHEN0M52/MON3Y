@@ -81,7 +81,6 @@ def render_top_under_page(df, version):
         df,
         key_prefix=f"top_under_{version}",
     )
-    filtered = filtered[filtered["market"] != "batter_home_runs"]
     _render_ranked_table(
         filtered,
         "under_probability",

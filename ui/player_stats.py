@@ -6,6 +6,7 @@ from functools import lru_cache
 import numpy as np
 import pandas as pd
 
+from ui.market_filters import EXCLUDED_UI_MARKETS
 from utils import PROCESSED_DIR, normalize_version
 
 MARKET_STAT_MAP = {
@@ -135,8 +136,10 @@ def infer_player_kind(markets) -> str:
 
 def markets_for_kind(kind: str):
     if kind == "pitcher":
-        return sorted(PITCHER_MARKETS)
-    return sorted(BATTER_MARKETS)
+        markets = PITCHER_MARKETS
+    else:
+        markets = BATTER_MARKETS
+    return sorted(markets - EXCLUDED_UI_MARKETS)
 
 
 def window_average(game_log, stat_col, window):
