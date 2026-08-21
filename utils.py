@@ -1,6 +1,7 @@
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 import os
+import unicodedata
 
 import numpy as np
 import pandas as pd
@@ -47,6 +48,283 @@ load_dotenv()
 ODDS_API_KEY = os.getenv(
     "ODDS_API_KEY"
 )
+
+
+def normalize_player_key(name) -> str:
+    """Lowercase player name with accents stripped for cross-source matching."""
+    text = str(name).strip().lower()
+    text = (
+        unicodedata
+        .normalize("NFKD", text)
+        .encode("ascii", "ignore")
+        .decode()
+    )
+    # Odds API often drops periods in initials (JT Ginn vs J.T. Ginn in Statcast).
+    text = text.replace(".", "")
+    return " ".join(text.split())
+
+
+PITCHER_SP_PROP_MARKETS = frozenset({
+    "pitcher_strikeouts",
+    "pitcher_walks",
+    "pitcher_hits_allowed",
+    "pitcher_outs",
+})
+
+DEFAULT_SP_LAG_THRESHOLD = 2
+
+DAILY_PROBABLES_PATH = PROCESSED_DIR / "daily_probables.parquet"
+
+
+def _props_game_key(row) -> tuple:
+    event_id = row.get("event_id")
+    if pd.notna(event_id) and str(event_id).strip():
+        return ("event", str(event_id))
+
+    home = row.get("home_team")
+    away = row.get("away_team")
+    if pd.notna(home) and pd.notna(away):
+        return (
+            "teams",
+            canonical_odds_team_key(home),
+            canonical_odds_team_key(away),
+        )
+
+    return ("unknown",)
+
+
+def _game_label(home_team, away_team) -> str:
+    if pd.notna(home_team) and pd.notna(away_team):
+        return f"{away_team} @ {home_team}"
+    return "unknown game"
+
+
+def analyze_sp_prop_coverage(
+    props: pd.DataFrame,
+    *,
+    probables: pd.DataFrame | None = None,
+    lag_threshold: int = DEFAULT_SP_LAG_THRESHOLD,
+) -> dict:
+    """
+    Compare posted pitcher props to expected starting-pitcher coverage.
+
+    Expect ~2 SPs with props per game (one per team). Returns a summary dict;
+    does not print or abort.
+    """
+    empty = {
+        "ok": True,
+        "game_count": 0,
+        "team_count": 0,
+        "expected_min_pitchers": 0,
+        "pitcher_count": 0,
+        "warnings": [],
+        "games_missing_sp": [],
+    }
+
+    if props is None or props.empty:
+        return empty
+
+    if probables is None and DAILY_PROBABLES_PATH.exists():
+        try:
+            probables = pd.read_parquet(DAILY_PROBABLES_PATH)
+        except Exception:
+            probables = None
+
+    games = (
+        props.dropna(subset=["home_team", "away_team"], how="any")
+        if {"home_team", "away_team"}.issubset(props.columns)
+        else pd.DataFrame()
+    )
+
+    if games.empty and "event_id" in props.columns:
+        games = props.dropna(subset=["event_id"])
+
+    if games.empty:
+        return empty
+
+    games = games.copy()
+    games["_game_key"] = games.apply(_props_game_key, axis=1)
+    games = games[games["_game_key"].ne(("unknown",))]
+
+    game_count = games["_game_key"].nunique()
+    if game_count == 0:
+        return empty
+
+    team_count = game_count * 2
+    expected_min_pitchers = max(
+        0,
+        team_count - max(0, int(lag_threshold)),
+    )
+
+    sp_props = props[
+        props["market"].isin(PITCHER_SP_PROP_MARKETS)
+        & props["player"].notna()
+    ].copy()
+
+    if not sp_props.empty:
+        sp_props["_game_key"] = sp_props.apply(_props_game_key, axis=1)
+        sp_props["_player_key"] = sp_props["player"].map(normalize_player_key)
+    else:
+        sp_props["_game_key"] = pd.Series(dtype=object)
+        sp_props["_player_key"] = pd.Series(dtype=object)
+
+    pitcher_count = (
+        sp_props["_player_key"].nunique()
+        if not sp_props.empty
+        else 0
+    )
+
+    games_missing_sp = []
+    game_meta = (
+        games.groupby("_game_key", as_index=False)
+        .agg(
+            home_team=("home_team", "first"),
+            away_team=("away_team", "first"),
+        )
+    )
+
+    prob_lookup = {}
+    if probables is not None and not probables.empty:
+        for _, row in probables.iterrows():
+            key = (
+                "teams",
+                canonical_odds_team_key(row.get("home_team")),
+                canonical_odds_team_key(row.get("away_team")),
+            )
+            prob_lookup[key] = row
+
+    for _, game in game_meta.iterrows():
+        game_key = game["_game_key"]
+        game_sp = sp_props[sp_props["_game_key"].eq(game_key)]
+        posted_keys = set(game_sp["_player_key"].dropna().unique())
+        posted_count = len(posted_keys)
+
+        if posted_count >= 2:
+            continue
+
+        label = _game_label(game["home_team"], game["away_team"])
+        missing_sides = []
+
+        prob_row = prob_lookup.get(game_key)
+        if prob_row is not None:
+            for side, name_col in (
+                ("away", "away_sp_name"),
+                ("home", "home_sp_name"),
+            ):
+                sp_name = prob_row.get(name_col)
+                if not isinstance(sp_name, str) or not sp_name.strip():
+                    missing_sides.append(f"{side} SP TBD (no probable)")
+                    continue
+
+                if normalize_player_key(sp_name) not in posted_keys:
+                    missing_sides.append(f"{side} SP {sp_name}")
+        elif posted_count == 0:
+            missing_sides.append("no SP props posted")
+        else:
+            missing_sides.append(
+                f"only {posted_count}/2 SP(s) with props"
+            )
+
+        games_missing_sp.append({
+            "game": label,
+            "posted_sp_count": posted_count,
+            "missing": missing_sides,
+        })
+
+    warnings = []
+    if pitcher_count < expected_min_pitchers:
+        warnings.append(
+            "Only "
+            f"{pitcher_count} unique pitcher(s) with SP props "
+            f"(expected at least {expected_min_pitchers} for "
+            f"{game_count} game(s), ~2 per game minus lag "
+            f"threshold {lag_threshold})."
+        )
+    elif pitcher_count < team_count:
+        warnings.append(
+            f"{pitcher_count} unique pitcher(s) with SP props "
+            f"for {team_count} teams playing "
+            f"({game_count} game(s))."
+        )
+
+    if games_missing_sp:
+        detail_lines = []
+        for item in games_missing_sp:
+            missing_text = "; ".join(item["missing"])
+            detail_lines.append(
+                f"  - {item['game']}: {missing_text}"
+            )
+        warnings.append(
+            "Games missing SP prop coverage:\n"
+            + "\n".join(detail_lines)
+        )
+
+    ok = pitcher_count >= expected_min_pitchers
+
+    return {
+        "ok": ok,
+        "game_count": int(game_count),
+        "team_count": int(team_count),
+        "expected_min_pitchers": int(expected_min_pitchers),
+        "pitcher_count": int(pitcher_count),
+        "warnings": warnings,
+        "games_missing_sp": games_missing_sp,
+    }
+
+
+def warn_sp_prop_coverage(
+    props: pd.DataFrame,
+    *,
+    probables: pd.DataFrame | None = None,
+    lag_threshold: int = DEFAULT_SP_LAG_THRESHOLD,
+    context: str = "",
+) -> dict:
+    """
+    Print non-fatal warnings when SP props look incomplete.
+
+    Safe to call after props fetch and before predict; never aborts.
+    """
+    result = analyze_sp_prop_coverage(
+        props,
+        probables=probables,
+        lag_threshold=lag_threshold,
+    )
+
+    if result["game_count"] == 0:
+        return result
+
+    prefix = "WARNING: SP prop coverage"
+    if context:
+        prefix = f"{prefix} ({context})"
+
+    print()
+    print("=" * 60)
+    print(f"{prefix}")
+    print("=" * 60)
+    print(
+        f"Games: {result['game_count']} | "
+        f"Teams: {result['team_count']} | "
+        f"Pitchers with SP props: {result['pitcher_count']} | "
+        f"Expected min: {result['expected_min_pitchers']}"
+    )
+
+    if result["ok"]:
+        print("OK — SP prop coverage looks complete.")
+    else:
+        for message in result["warnings"]:
+            print(message)
+
+    if result["games_missing_sp"] and result["ok"]:
+        print(
+            "Per-game gaps (within aggregate lag threshold):"
+        )
+        for item in result["games_missing_sp"]:
+            missing_text = "; ".join(item["missing"])
+            print(f"  - {item['game']}: {missing_text}")
+
+    print()
+
+    return result
 
 
 class LiveFetchDisabledError(RuntimeError):
@@ -250,6 +528,68 @@ def parquet_max_game_date(
     return pd.to_datetime(series).max().date()
 
 
+MLB_STATS_API = "https://statsapi.mlb.com/api/v1"
+
+
+def mlb_games_on_date(game_date: str) -> bool | None:
+    """True if MLB games are scheduled; None when schedule is unavailable."""
+    if live_fetch_disabled():
+        return None
+
+    try:
+        import requests
+
+        response = requests.get(
+            f"{MLB_STATS_API}/schedule",
+            params={"sportId": 1, "date": game_date},
+            timeout=10,
+        )
+        response.raise_for_status()
+        dates = response.json().get("dates") or []
+        if not dates:
+            return False
+        return bool(dates[0].get("games"))
+    except Exception:
+        return None
+
+
+def last_mlb_game_date_on_or_before(
+    end_date: str,
+    max_lookback: int = 10,
+) -> date | None:
+    """Latest date <= end_date with scheduled MLB games, or None if unknown."""
+    end = pd.Timestamp(end_date).date()
+    for offset in range(max_lookback + 1):
+        candidate = end - timedelta(days=offset)
+        games = mlb_games_on_date(candidate.isoformat())
+        if games is True:
+            return candidate
+        if games is None:
+            return None
+    return None
+
+
+def required_max_game_date(
+    end_date: str,
+    statcast_path: Path | None = None,
+) -> date:
+    """Latest game_date data should cover through end_date.
+
+    Uses the MLB schedule so an off-day end_date (no games) does not require
+    rows on that calendar date. Falls back to Statcast max when offline.
+    """
+    last_game = last_mlb_game_date_on_or_before(end_date)
+    if last_game is not None:
+        return last_game
+
+    if statcast_path is not None:
+        statcast_max = parquet_max_game_date(statcast_path)
+        if statcast_max is not None:
+            return statcast_max
+
+    return pd.Timestamp(end_date).date()
+
+
 def statcast_needs_refresh(
     start_date: str,
     end_date: str,
@@ -263,14 +603,16 @@ def statcast_needs_refresh(
     if max_date is None:
         return True
 
-    return max_date < pd.Timestamp(end_date).date()
+    required = required_max_game_date(end_date, path)
+    return max_date < required
 
 
 def feature_parquet_needs_refresh(
     path: Path,
+    start_date: str,
     end_date: str,
 ) -> bool:
-    """True when a feature parquet exists but stops before end_date."""
+    """True when a feature parquet is behind Statcast or the required game date."""
     if not path.exists():
         return False
 
@@ -278,7 +620,86 @@ def feature_parquet_needs_refresh(
     if max_date is None:
         return False
 
-    return max_date < pd.Timestamp(end_date).date()
+    statcast_path = statcast_raw_path(start_date, end_date)
+    statcast_max = parquet_max_game_date(statcast_path)
+    if statcast_max is not None:
+        return max_date < statcast_max
+
+    required = required_max_game_date(end_date, statcast_path)
+    return max_date < required
+
+
+def _feature_prefix(version: str, role: str) -> str:
+    version = normalize_version(version)
+    if version == "v1":
+        return (
+            "batter_features_"
+            if role == "batter"
+            else "pitcher_features_"
+        )
+    return (
+        "batter_features_v2_"
+        if role == "batter"
+        else "pitcher_features_v2_"
+    )
+
+
+def find_covering_feature_path(
+    start_date,
+    end_date,
+    version="v2",
+    role="batter",
+):
+    """Smallest on-disk feature parquet that covers [start_date, end_date]."""
+    version = normalize_version(version)
+    prefix = _feature_prefix(version, role)
+    candidates = []
+
+    for path in PROCESSED_DIR.glob(f"{prefix}*.parquet"):
+        stem = path.stem.replace(prefix, "", 1)
+        if "_" not in stem:
+            continue
+
+        file_start, file_end = stem.split("_", 1)
+        if file_start <= start_date and file_end >= end_date:
+            span = (
+                pd.to_datetime(file_end)
+                - pd.to_datetime(file_start)
+            ).days
+            candidates.append((span, path))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def resolve_feature_path(
+    start_date,
+    end_date,
+    version="v2",
+    role="batter",
+):
+    """Exact feature path if present, else smallest covering parquet."""
+    exact = (
+        batter_features_path(start_date, end_date, version)
+        if role == "batter"
+        else pitcher_features_path(start_date, end_date, version)
+    )
+    if exact.exists():
+        return exact
+
+    covering = find_covering_feature_path(
+        start_date,
+        end_date,
+        version,
+        role,
+    )
+    if covering is not None:
+        return covering
+
+    return exact
 
 
 def batter_features_path(

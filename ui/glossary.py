@@ -138,12 +138,14 @@ GLOSSARY = {
     "market": "The player prop type (hits, strikeouts, total bases, etc.).",
     "commence_time": "Scheduled first pitch time for this game.",
     "min_edge": (
-        "Filter props where model edge (Model % − Market %) is at least "
-        "this value. Higher edge = stronger disagreement with the market."
+        "Optional filter: show only props where model edge "
+        "(Model % − Market %) is at least this value. "
+        "Default 0% shows all props; edge is always visible in the Edge % column."
     ),
     "min_ev": (
-        "Filter props where expected value is at least this value. "
-        "EV accounts for both probability and payout odds."
+        "Optional filter: show only props where expected value is at least "
+        "this value. Default 0% shows all props; EV is always visible in the "
+        "EV % column."
     ),
     "filter_market": "Show only props in the selected markets.",
     "filter_player": (

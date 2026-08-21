@@ -12,6 +12,7 @@ import pandas as pd
 from odds_api import (
     GAME_MARKETS,
     PROP_MARKETS,
+    PROP_REGIONS,
     OddsApiQuotaError,
     normalize_event,
     odds_request,
@@ -89,7 +90,7 @@ def get_historical_event_odds(
 
     params = {
         "apiKey": ODDS_API_KEY,
-        "regions": "us",
+        "regions": PROP_REGIONS,
         "markets": ",".join(
             markets
         ),

@@ -10,6 +10,7 @@ from utils import (
     version_models_dir,
     american_to_implied_probability,
     expected_value,
+    normalize_player_key,
 )
 
 
@@ -124,34 +125,27 @@ def fuzzy_player_match(
     ):
         return None
 
-    name = (
-        player_name
-        .lower()
-        .strip()
-    )
+    name = normalize_player_key(player_name)
+    normalized = candidates.map(normalize_player_key)
 
-    exact = candidates[
-        candidates
-        .str.lower()
-        .str.strip()
-        .eq(name)
-    ]
+    exact = candidates[normalized.eq(name)]
 
     if len(exact) > 0:
         return exact.iloc[0]
 
-    last_name = name.split()[-1]
+    parts = name.split()
+    if len(parts) < 2:
+        return None
 
+    first_name, last_name = parts[0], parts[-1]
+    last_names = normalized.str.split().str[-1]
+    first_names = normalized.str.split().str[0]
     matches = candidates[
-        candidates
-        .str.lower()
-        .str.contains(
-            last_name,
-            na=False,
-        )
+        last_names.eq(last_name)
+        & first_names.eq(first_name)
     ]
 
-    if len(matches) > 0:
+    if len(matches) == 1:
         return matches.iloc[0]
 
     return None

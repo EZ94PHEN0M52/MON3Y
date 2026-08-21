@@ -286,11 +286,17 @@ def test_stale_feature_data_triggers_issue() -> None:
             game_dates=["2099-04-01", "2099-04-02"],
         )
 
-        stale_table = pa.Table.from_pydict(
-            {"game_date": ["2099-04-01", "2099-04-02"]}
+        current_table = pa.Table.from_pydict(
+            {
+                "game_date": [
+                    "2099-04-01",
+                    "2099-04-02",
+                    "2099-04-03",
+                ]
+            }
         )
         pq.write_table(
-            stale_table,
+            current_table,
             raw / f"statcast_{start}_{end}.parquet",
         )
 
@@ -330,6 +336,84 @@ def test_stale_feature_data_triggers_issue() -> None:
         assert any(issue.stale_data for issue in issues)
 
 
+def test_off_day_end_date_matches_statcast() -> None:
+    start = "2099-05-01"
+    end = "2099-05-03"
+    version = "v2"
+
+    required = feature_columns_for_version(version)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        processed = Path(tmp) / "processed"
+        raw = Path(tmp) / "raw"
+        processed.mkdir()
+        raw.mkdir()
+
+        batter_path = processed / (
+            f"batter_features_v2_{start}_{end}.parquet"
+        )
+        pitcher_path = processed / (
+            f"pitcher_features_v2_{start}_{end}.parquet"
+        )
+
+        write_minimal_parquet(
+            batter_path,
+            required["batter"] + ["game_date"],
+            fingerprint=feature_schema_fingerprint("v2"),
+            game_dates=["2099-05-01", "2099-05-02"],
+        )
+        write_minimal_parquet(
+            pitcher_path,
+            required["pitcher"] + ["game_date"],
+            fingerprint=feature_schema_fingerprint("v2"),
+            game_dates=["2099-05-01", "2099-05-02"],
+        )
+
+        pq.write_table(
+            pa.Table.from_pydict(
+                {"game_date": ["2099-05-01", "2099-05-02"]}
+            ),
+            raw / f"statcast_{start}_{end}.parquet",
+        )
+
+        import scripts.ensure_features as ensure_features
+        import utils
+
+        def mock_batter(
+            s: str,
+            e: str,
+            v: str = "v2",
+        ) -> Path:
+            return batter_path
+
+        def mock_pitcher(
+            s: str,
+            e: str,
+            v: str = "v2",
+        ) -> Path:
+            return pitcher_path
+
+        def mock_statcast_raw(
+            s: str,
+            e: str,
+        ) -> Path:
+            return raw / f"statcast_{s}_{e}.parquet"
+
+        ensure_features.batter_features_path = mock_batter
+        ensure_features.pitcher_features_path = mock_pitcher
+        utils.batter_features_path = mock_batter
+        utils.pitcher_features_path = mock_pitcher
+        utils.statcast_raw_path = mock_statcast_raw
+        utils.RAW_DIR = raw
+
+        issues = check_range(start, end, version)
+
+        assert not issues, (
+            "expected matching feature/statcast max to pass when end_date "
+            "has no extra game rows"
+        )
+
+
 def main() -> int:
     test_summarize_missing_columns_groups_windows()
     test_missing_walks_columns_triggers_issue()
@@ -337,6 +421,7 @@ def main() -> int:
     test_training_odds_not_in_source_files()
     test_source_mtime_ignores_train_py()
     test_stale_feature_data_triggers_issue()
+    test_off_day_end_date_matches_statcast()
     print("ensure_features logic tests passed")
     return 0
 

@@ -41,7 +41,7 @@ from batter_score import (
 )
 from build_features import EXTRA_BASES, HITS
 from fetch_probables import PROBABLES_PATH, lookup_opposing_sp
-from pitch_matchup import arsenal_ready, build_opponent_pitcher_arsenal
+from pitch_matchup import AB_EVENTS, arsenal_ready, build_opponent_pitcher_arsenal
 from ui.player_stats import (
     _feature_cache_key,
     _fuzzy_player_key,
@@ -155,6 +155,34 @@ def _load_latest_statcast(path_key) -> Optional[pd.DataFrame]:
     return pd.read_parquet(path_str)
 
 
+def _merged_statcast_cache_key():
+    candidates = sorted(RAW_DIR.glob("statcast_*.parquet"), key=lambda path: path.stem)
+    if not candidates:
+        return ((), ())
+
+    return (
+        tuple(str(path) for path in candidates),
+        tuple(_feature_cache_key(path)[1] for path in candidates),
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_merged_statcast(cache_key) -> Optional[pd.DataFrame]:
+    """All statcast shards merged and deduped — for board career H2H display."""
+    paths, _mtimes = cache_key
+    if not paths:
+        return None
+
+    frames = [pd.read_parquet(path) for path in paths]
+    merged = pd.concat(frames, ignore_index=True)
+
+    dedup_cols = ["game_pk", "at_bat_number", "pitch_number"]
+    if all(column in merged.columns for column in dedup_cols):
+        merged = merged.drop_duplicates(subset=dedup_cols, keep="last")
+
+    return merged
+
+
 def _batter_rows(
     player_name: str,
     version: str = "v2",
@@ -237,31 +265,41 @@ def _h2h_raw_points(events: pd.Series) -> Tuple[int, float]:
     return pa_count, raw_points
 
 
+def _h2h_hits_ab(events: pd.Series) -> Tuple[int, int]:
+    """Career hits and at-bats vs one SP from Statcast terminal events."""
+    hits = int(events.isin(HITS).sum())
+    ab = int(events.isin(AB_EVENTS).sum())
+    return hits, ab
+
+
 def _compute_h2h_stats(
     batter_id: Optional[int],
     sp_id: Optional[int],
-) -> Tuple[Optional[int], Optional[float]]:
+    *,
+    statcast: Optional[pd.DataFrame] = None,
+) -> Tuple[Optional[int], Optional[float], Optional[int], Optional[int]]:
     """
     Batter vs SP career H2H from Statcast raw.
 
-    Returns (pa_count, avg H+TB+BB per game vs that SP). H2H is omitted
-    (None, None) when PA < MIN_PA_H2H — never zeroed out in scoring.
+    Returns (pa_count, avg H+TB+BB per game vs that SP, hits, ab).
+    Scoring still omits H2H when PA < MIN_PA_H2H; hits/ab are for board display.
     """
     if batter_id is None or sp_id is None:
-        return None, None
+        return None, None, None, None
 
     batter_id = coerce_mlb_id(batter_id)
     sp_id = coerce_mlb_id(sp_id)
     if batter_id is None or sp_id is None:
-        return None, None
+        return None, None, None, None
 
-    statcast = _load_latest_statcast(_statcast_cache_key())
+    if statcast is None:
+        statcast = _load_latest_statcast(_statcast_cache_key())
     if statcast is None or statcast.empty:
-        return None, None
+        return None, None, None, None
 
     required = {"batter", "pitcher", "events", "game_date"}
     if not required.issubset(statcast.columns):
-        return None, None
+        return None, None, None, None
 
     matchups = statcast[
         statcast["batter"].astype(int).eq(batter_id)
@@ -270,9 +308,10 @@ def _compute_h2h_stats(
     ].copy()
 
     if matchups.empty:
-        return 0, None
+        return 0, None, 0, 0
 
     pa_count = int(len(matchups))
+    h2h_hits, h2h_ab = _h2h_hits_ab(matchups["events"])
 
     game_stats = []
     for _, group in matchups.groupby("game_date", sort=False):
@@ -280,10 +319,10 @@ def _compute_h2h_stats(
         game_stats.append(raw_points)
 
     if not game_stats:
-        return pa_count, None
+        return pa_count, None, h2h_hits, h2h_ab
 
     avg_raw_points = float(np.mean(game_stats))
-    return pa_count, avg_raw_points
+    return pa_count, avg_raw_points, h2h_hits, h2h_ab
 
 
 def _team_opp_earned_runs_proxy(
@@ -399,6 +438,8 @@ def build_batter_inputs_from_rows(
     sp_era_l5 = None
     h2h_pa = None
     h2h_avg_raw_points = None
+    h2h_hits = None
+    h2h_ab = None
     team_proxy = None
     opponent_arsenal = []
 
@@ -416,7 +457,7 @@ def build_batter_inputs_from_rows(
                 version=version,
             )
             if sp_id is not None:
-                h2h_pa, h2h_avg_raw_points = _compute_h2h_stats(
+                h2h_pa, h2h_avg_raw_points, h2h_hits, h2h_ab = _compute_h2h_stats(
                     batter_id,
                     sp_id,
                 )
@@ -438,6 +479,8 @@ def build_batter_inputs_from_rows(
         opposing_sp_name=sp_name,
         h2h_pa=h2h_pa,
         h2h_avg_raw_points=h2h_avg_raw_points,
+        h2h_hits=h2h_hits,
+        h2h_ab=h2h_ab,
         team_opp_earned_runs_proxy=team_proxy,
     )
 
@@ -666,6 +709,41 @@ def _cached_score(
         version=version,
         game_context=game_context,
     )
+
+
+def lookup_h2h_board_stats(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    """
+    Career H2H (pa, hits, ab) for the board vs-pitcher column.
+
+    Uses merged statcast shards so prior-season matchups are included.
+    Scoring still reads only the latest statcast file via build_batter_inputs().
+    """
+    player_rows = _batter_rows(player_name, version=version)
+    if player_rows is None or player_rows.empty or not game_context:
+        return None, None, None
+
+    latest = player_rows.sort_values("game_date").iloc[-1]
+    batter_id = coerce_mlb_id(latest.get("batter"))
+    batter_team = latest.get("team")
+    if batter_id is None or not isinstance(batter_team, str) or not batter_team.strip():
+        return None, None, None
+
+    _, sp_id = _lookup_opposing_sp_for_context(game_context, batter_team)
+    sp_id = coerce_mlb_id(sp_id)
+    if sp_id is None:
+        return None, None, None
+
+    statcast = _load_merged_statcast(_merged_statcast_cache_key())
+    pa, _, hits, ab = _compute_h2h_stats(
+        batter_id,
+        sp_id,
+        statcast=statcast,
+    )
+    return pa, hits, ab
 
 
 def lookup_batter_score(

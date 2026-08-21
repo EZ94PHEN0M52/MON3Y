@@ -7,7 +7,10 @@ from ui.formatting import market_label
 from ui.glossary import GLOSSARY
 
 # Trained and scored in the pipeline, but not shown in Streamlit.
-EXCLUDED_UI_MARKETS = frozenset({"batter_home_runs"})
+EXCLUDED_UI_MARKETS = frozenset({
+    "batter_home_runs",
+    "batter_stolen_bases",
+})
 
 
 def exclude_ui_markets(df):

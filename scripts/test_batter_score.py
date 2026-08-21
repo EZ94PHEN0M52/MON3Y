@@ -185,6 +185,12 @@ def test_min_pa_h2h_constant():
     assert MIN_PA_H2H == 10
 
 
+def test_min_pa_h2h_board_constant():
+    from ui.batter_score_board import MIN_PA_H2H_BOARD
+
+    assert MIN_PA_H2H_BOARD == 3
+
+
 def test_gated_full_score_requires_matchup_inputs():
     from batter_score import compute_batter_score, PitchTypeMatchup
 
@@ -476,6 +482,230 @@ def test_score_batter_as_of_point_in_time():
     assert 0.0 <= scored.batter_score <= 100.0
 
 
+def test_format_vs_pitcher_h2h_and_era_fallback():
+    from batter_score import BatterScoreResult
+    from ui.batter_score_board import MIN_PA_H2H_BOARD, _format_vs_pitcher
+
+    h2h = BatterScoreResult(
+        batter_name="Test",
+        season_baseline=50.0,
+        recent_form=50.0,
+        matchup_grade=None,
+        pitcher_form=50.0,
+        batter_score=50.0,
+        h2h_pa=MIN_PA_H2H_BOARD,
+        h2h_hits=2,
+        h2h_ab=7,
+        opposing_sp_name="Ace",
+        opposing_sp_era_l5=3.10,
+    )
+    assert _format_vs_pitcher(h2h) == "2/7 .286"
+
+    below_board_min = BatterScoreResult(
+        batter_name="Test",
+        season_baseline=50.0,
+        recent_form=50.0,
+        matchup_grade=None,
+        pitcher_form=50.0,
+        batter_score=50.0,
+        h2h_pa=MIN_PA_H2H_BOARD - 1,
+        h2h_hits=2,
+        h2h_ab=7,
+        opposing_sp_name="Ace",
+        opposing_sp_era_l5=2.75,
+    )
+    assert _format_vs_pitcher(below_board_min) == "SP ERA L5 2.75"
+
+    era_only = BatterScoreResult(
+        batter_name="Test",
+        season_baseline=50.0,
+        recent_form=50.0,
+        matchup_grade=None,
+        pitcher_form=50.0,
+        batter_score=50.0,
+        opposing_sp_name="Ace",
+        opposing_sp_era_l5=2.75,
+    )
+    assert _format_vs_pitcher(era_only) == "SP ERA L5 2.75"
+
+    zero_avg = BatterScoreResult(
+        batter_name="Test",
+        season_baseline=50.0,
+        recent_form=50.0,
+        matchup_grade=None,
+        pitcher_form=50.0,
+        batter_score=50.0,
+        h2h_pa=MIN_PA_H2H_BOARD,
+        h2h_hits=0,
+        h2h_ab=3,
+        opposing_sp_name="Ace",
+        opposing_sp_era_l5=3.10,
+    )
+    assert _format_vs_pitcher(zero_avg) == "0/3 .000"
+
+
+def test_compute_h2h_stats_kirk_vs_seymour():
+    from pathlib import Path
+
+    from batter_score_data import (
+        _compute_h2h_stats,
+        _load_merged_statcast,
+        _merged_statcast_cache_key,
+    )
+
+    statcast = sorted(Path("data/raw").glob("statcast_*.parquet"))
+    if not statcast:
+        return
+
+    kirk_id = 672386
+    seymour_id = 693855
+
+    # Scoring path still uses the latest statcast shard only.
+    pa, avg_raw, hits, ab = _compute_h2h_stats(kirk_id, seymour_id)
+    assert pa == 3
+    assert hits == 0
+    assert ab == 3
+    assert avg_raw == 0.0
+
+    # Board display merges all shards (includes 2025 Kirk vs Seymour).
+    merged = _load_merged_statcast(_merged_statcast_cache_key())
+    board_pa, _, board_hits, board_ab = _compute_h2h_stats(
+        kirk_id,
+        seymour_id,
+        statcast=merged,
+    )
+    assert board_pa >= 7
+    assert board_hits == 2
+    assert board_ab == 7
+
+
+def test_build_all_batter_score_df_includes_all_players():
+    from unittest.mock import patch
+
+    from batter_score import BatterScoreResult
+    from ui.batter_score_board import build_all_batter_score_df
+
+    props = pd.DataFrame(
+        {
+            "player": ["Alice", "Alice", "Bob", "Carol"],
+            "market": ["batter_hits"] * 4,
+            "line": [0.5, 1.5, 0.5, 0.5],
+            "game": ["A @ B", "A @ B", "C @ D", "A @ B"],
+            "commence_time": ["2026-08-20T23:05:00Z"] * 4,
+            "batter_score": [72.0, 72.0, 88.5, 65.0],
+            "batter_score_label": ["", "", "Partial", ""],
+            "l5_l10_pct": ["60% / 50%", "40% / 30%", "70% / 60%", "—"],
+        }
+    )
+
+    mock_result = BatterScoreResult(
+        batter_name="Bob",
+        season_baseline=50.0,
+        recent_form=50.0,
+        matchup_grade=None,
+        pitcher_form=50.0,
+        batter_score=88.5,
+        opposing_sp_name="Starter",
+    )
+
+    with patch(
+        "ui.batter_score_board.lookup_batter_score",
+        return_value=mock_result,
+    ):
+        all_df = build_all_batter_score_df(props, version="v2")
+
+    assert len(all_df) == 3
+    assert list(all_df["batter_score_display"]) == [
+        "88.5 (Partial)",
+        "72.0",
+        "65.0",
+    ]
+    assert set(all_df["_game"]) == {"A @ B", "C @ D"}
+
+
+def test_build_all_batter_score_df_filters_by_game():
+    from unittest.mock import patch
+
+    from batter_score import BatterScoreResult
+    from ui.batter_score_board import build_all_batter_score_df
+
+    props = pd.DataFrame(
+        {
+            "player": ["Alice", "Bob"],
+            "market": ["batter_hits", "batter_hits"],
+            "line": [0.5, 0.5],
+            "game": ["A @ B", "C @ D"],
+            "commence_time": ["2026-08-20T23:05:00Z"] * 2,
+            "batter_score": [80.0, 70.0],
+            "batter_score_label": ["", ""],
+            "l5_l10_pct": ["—", "—"],
+        }
+    )
+
+    mock_result = BatterScoreResult(
+        batter_name="Test",
+        season_baseline=50.0,
+        recent_form=50.0,
+        matchup_grade=None,
+        pitcher_form=50.0,
+        batter_score=75.0,
+    )
+
+    with patch(
+        "ui.batter_score_board.lookup_batter_score",
+        return_value=mock_result,
+    ):
+        all_df = build_all_batter_score_df(props, version="v2")
+
+    game_b = all_df[all_df["_game"] == "A @ B"]
+    assert len(game_b) == 1
+    assert game_b.iloc[0]["batter_score_display"] == "80.0"
+
+
+def test_build_top_batter_score_df_ranks_unique_players():
+    from unittest.mock import patch
+
+    from batter_score import BatterScoreResult
+    from ui.batter_score_board import build_top_batter_score_df
+
+    props = pd.DataFrame(
+        {
+            "player": ["Alice", "Alice", "Bob", "Carol"],
+            "market": ["batter_hits"] * 4,
+            "line": [0.5, 1.5, 0.5, 0.5],
+            "game": ["A @ B"] * 4,
+            "commence_time": ["2026-08-20T23:05:00Z"] * 4,
+            "batter_score": [72.0, 72.0, 88.5, 65.0],
+            "batter_score_label": ["", "", "Partial", ""],
+            "l5_l10_pct": ["60% / 50%", "40% / 30%", "70% / 60%", "—"],
+        }
+    )
+
+    mock_result = BatterScoreResult(
+        batter_name="Bob",
+        season_baseline=50.0,
+        recent_form=50.0,
+        matchup_grade=None,
+        pitcher_form=50.0,
+        batter_score=88.5,
+        opposing_sp_name="Starter",
+    )
+
+    with patch(
+        "ui.batter_score_board.lookup_batter_score",
+        return_value=mock_result,
+    ):
+        top = build_top_batter_score_df(props, version="v2")
+
+    assert list(top["batter_score_display"]) == [
+        "88.5 (Partial)",
+        "72.0",
+        "65.0",
+    ]
+    assert top.iloc[0]["opposing_sp"] == "Starter"
+    assert top.iloc[0]["l5_l10_pct"] == "70% / 60%"
+
+
 if __name__ == "__main__":
     test_renormalize_phase_a_weights()
     test_renormalize_phase_b_weights()
@@ -486,6 +716,7 @@ if __name__ == "__main__":
     test_h2h_blended_at_min_pa()
     test_partial_score_equals_renormalized_blend()
     test_min_pa_h2h_constant()
+    test_min_pa_h2h_board_constant()
     test_gated_full_score_requires_matchup_inputs()
     test_dedupe_best_prop_one_row_per_player_market()
     test_pitch_code_to_bucket()
@@ -500,4 +731,9 @@ if __name__ == "__main__":
     test_pitcher_rows_by_sp_nan_id_falls_back_to_name()
     test_batter_score_validation_loader()
     test_score_batter_as_of_point_in_time()
+    test_format_vs_pitcher_h2h_and_era_fallback()
+    test_compute_h2h_stats_kirk_vs_seymour()
+    test_build_all_batter_score_df_includes_all_players()
+    test_build_all_batter_score_df_filters_by_game()
+    test_build_top_batter_score_df_ranks_unique_players()
     print("All batter score tests passed.")

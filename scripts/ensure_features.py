@@ -168,7 +168,11 @@ def check_range(
             version,
         )
         stale_sources = stale_by_source_mtime(path, version)
-        stale_data = feature_parquet_needs_refresh(path, end_date)
+        stale_data = feature_parquet_needs_refresh(
+            path,
+            start_date,
+            end_date,
+        )
 
         if cols_missing or stale_schema or stale_sources or stale_data:
             issues.append(

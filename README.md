@@ -5,7 +5,9 @@
 - **GitHub:** [EZ94PHEN0M52/MON3Y](https://github.com/EZ94PHEN0M52/MON3Y) — tags **`v1`**, **`v2`**, **`v3`** mark frozen baselines; active development is on **`main`**
 - **Frozen local copies:** [`mlb-prop-model-v1/`](../mlb-prop-model-v1), [`mlb-prop-model-v2/`](../mlb-prop-model-v2), [`mlb-prop-model-v3/`](../mlb-prop-model-v3/)
 
-**Table of contents:** [Quick start](#quick-start-for-beginners) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
+**Table of contents:** [Quick start](#quick-start-for-beginners) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
+
+> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder). For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
 
 ---
 
@@ -36,6 +38,83 @@ The pipeline does four things:
 **Version compare** puts all four generations side-by-side on one table so you can see how **Over %** and **Under %** differ for the same player and market.
 
 This is **not** a betting service or a guarantee of profit. It is a statistical research dashboard.
+
+### Spin up V1 or V2 (action paths)
+
+Pick **one** path below. Both can coexist on the same machine (separate folders or `--version` flags). For side-by-side **Version compare**, see [Prepare all versions](#prepare-all-versions-for-version-compare).
+
+#### V1 — rolling-form baseline
+
+| Item | Value |
+|------|-------|
+| **Models** | `models/v1/*.pkl` |
+| **Predictions** | `data/predictions/predictions.csv` |
+| **Features** | `batter_features_v1_*`, `pitcher_features_v1_*` |
+
+**How to spin up (choose one):**
+
+| Path | When to use | First-time setup |
+|------|-------------|------------------|
+| **Frozen folder** | Self-contained V1, never touch active code | [`mlb-prop-model-v1/`](../mlb-prop-model-v1/) — `./run_daily.sh` there; see [that README](../mlb-prop-model-v1/README.md#spin-up-v1-self-contained) |
+| **Git tag `v1`** | Exact repo snapshot from GitHub | `git checkout v1` in a clone of [MON3Y](https://github.com/EZ94PHEN0M52/MON3Y) |
+| **Main repo + `--version v1`** | Compare V1 next to V2/V3 in this folder | [First-time setup](#first-time-setup-from-zero), then V1 predict below |
+
+**Daily commands (main repo or tag checkout — manual pipeline, no `run_daily.sh`):**
+
+```bash
+cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
+source .venv/bin/activate
+
+SEASON_START=2026-03-25
+YESTERDAY=$(date -v-1d +%Y-%m-%d)
+
+python fetch_data.py --props
+python fetch_data.py --statcast --start $SEASON_START --end $YESTERDAY
+python build_features.py --start $SEASON_START --end $YESTERDAY --version v1
+python predict.py --start $SEASON_START --end $YESTERDAY --version v1
+streamlit run app.py
+```
+
+**What NOT to run for V1 in this folder:** `./run_daily.sh` here — it always targets **V2** (`predict.py --version v2`, V2 feature parquets). For the frozen V1 copy, use [`mlb-prop-model-v1/`](../mlb-prop-model-v1/) and **that** repo's `./run_daily.sh`. V1 in this repo is a **compare column** and sidebar option, not the daily default.
+
+**Streamlit:** Sidebar **Model version** → select **`v1`** (board reads `predictions.csv`). Open **Version compare** for V1 vs V2 vs V3 vs Main.
+
+**Offline refresh (cached data only):**
+
+```bash
+DISABLE_LIVE_FETCH=1 python predict.py --start 2026-03-25 --end 2026-08-16 --version v1
+```
+
+---
+
+#### V2+ — modern pipeline (default)
+
+| Item | Value |
+|------|-------|
+| **Models** | `models/v2/*.pkl` (+ calibrators / distributional on main) |
+| **Predictions** | `data/predictions/predictions_v2.csv`, `predictions_v2_best.csv` |
+| **Features** | `batter_features_v2_*`, `pitcher_features_v2_*` |
+
+**How to spin up (choose one):**
+
+| Path | When to use | First-time setup |
+|------|-------------|------------------|
+| **This folder (main)** | Active dev — Batter Score, Pick Builder, dual-head K/walks | [First-time setup](#first-time-setup-from-zero) |
+| **Frozen folder `mlb-prop-model-v2/`** | Pre–Phases 1–6 snapshot (git tag **`v2`**) | [Standalone v2 setup](#standalone-v2-setup-legacy-baseline) |
+| **Frozen folder `mlb-prop-model-v3/`** | Phases 1–6 frozen at tag **`v3`** | [Standalone v3 setup](#standalone-v3-setup-recommended-frozen-copy) |
+
+**Daily commands (main — preferred):**
+
+```bash
+cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
+./run_daily.sh                  # fetch → features → predict_v2
+./run_daily.sh --streamlit      # same, then http://localhost:8501
+./run_daily.sh --skip-props     # reuse cached current_props.parquet
+```
+
+**Streamlit:** Sidebar **Model version** defaults to **`v2`**. Board, Pick Builder, Batter Score, and market filters use `predictions_v2.csv`. **Version compare** adds V3 (manual CSV copy) and Main (same file as V2 today).
+
+**Full step breakdown:** [Step A — V2 + Main](#step-a--v2--main-daily-pipeline) · [Daily workflow (V2)](#daily-workflow-v2) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls)
 
 ### Prerequisites
 
@@ -753,6 +832,8 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 **UI surfaces:**
 
 - **[Main board](#main-board-apppy--uiboardpy)** — sortable **Batter Score** column with labels **Full** / **Partial** / **Partial · SP TBD** / **Form only** (glossary tooltip)
+- **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter)
+- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** — all slate batters with **Game** selectbox filter ([`ui/batter_score_board.py`](ui/batter_score_board.py))
 - **[Player page](#player-pages-uplayerpy)** — component breakdown (season baseline, recent form, matchup, pitcher form), SP ERA L5 + H2H detail, H+TB+BB last-10 Altair chart
 - **[Stat history](#player-pages-uplayerpy)** — market dropdown (all batter/pitcher prop markets), **L5 / L10** window toggle, rolling averages, per-game Altair bar chart ([`ui/player_stats.py`](ui/player_stats.py))
 
@@ -877,6 +958,70 @@ See [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls) f
 **Open polish:** doubleheader `commence_time` join, stale probables badge, optional team ERA proxy validation.
 
 **Deferred:** Phase 6 extras (negative binomial, calibrators for all 13 markets).
+
+---
+
+## Predictable — PickFinder IP integration (v3.1 plan)
+
+The active workspace is evolving into **Predictable** — the same MLB prop research pipeline with planned enrichment from **PickFinder implied probability (IP)** on the main board. This section documents the **v3.1** integration plan. **Phase 1 discovery starts after** the Batter Score game-search board UI lands on `main`.
+
+> **⚠️ Pre-flight — snapshot before v3.1 work**
+>
+> Before starting PickFinder v3.1 integration, create a new **snapshot subversion** from the current baseline (**v3.0 → v3.1 Predictable**). Tag or copy the repo as **`mlb-prop-model-v3.1`** (or similar) so v3.0 remains a clean rollback point while PickFinder fetch/join/UI work proceeds on `main`.
+
+### Four-phase plan
+
+| Phase | Goal | Deliverable |
+|-------|------|-------------|
+| **1 — Discover API** | Reverse-engineer PickFinder's authenticated prop endpoints via browser DevTools | Documented request URLs, headers, auth cookies/tokens, and response JSON shape |
+| **2 — Fetch script** | Nightly (or on-demand) pull of PickFinder props | [`fetch_pickfinder.py`](fetch_pickfinder.py) → `data/processed/pickfinder_props.parquet` with columns **`player`**, **`market`**, **`line`**, **`pf_over_pct`**, **`pf_under_pct`** |
+| **3 — Board join** | Enrich predictions at Streamlit load (same pattern as Batter Score) | Left join on **`(player, market, line)`** during board enrichment in [`app.py`](app.py) / [`predict.py`](predict.py) pipeline |
+| **4 — UI subscripts** | Show PickFinder IP beside model Over % / Under % | Model value remains **primary**; PickFinder Over % / Under % render as **subscript** under the main cell |
+
+### Double subscript when lines differ
+
+When the board's posted **line ≠ PickFinder line**, retain both for analysis by showing the PickFinder line in the cell identifier, e.g. **`16.5 (PF: 17.5)`** — board line first, PickFinder line in parentheses. Subscript percentages always refer to the PickFinder line on that row; the model % stays tied to the board line.
+
+### PickFinder ↔ internal market map
+
+Map PickFinder display labels to this repo's `market` keys before join:
+
+| PickFinder label | Internal `market` |
+|------------------|-------------------|
+| Hits | `batter_hits` |
+| Home Runs | `batter_home_runs` |
+| Total Bases | `batter_total_bases` |
+| RBIs | `batter_rbis` |
+| Runs | `batter_runs_scored` |
+| Batter Walks | `batter_walks` |
+| Hits + Runs + RBIs | `batter_hits_runs_rbis` |
+| Stolen Bases | `batter_stolen_bases` |
+| Strikeouts | `pitcher_strikeouts` |
+| Pitcher Walks | `pitcher_walks` |
+| Hits Allowed | `pitcher_hits_allowed` |
+| Pitching Outs | `pitcher_outs` |
+| Earned Runs | `pitcher_earned_runs` |
+
+Confirm exact PickFinder strings in Phase 1 — aliases may differ slightly from the table above.
+
+### Phase 1 — DevTools discovery (start here after UI work)
+
+PickFinder requires an **active subscription**. Use a logged-in browser session to capture live API traffic:
+
+1. Open [PickFinder](https://pickfinder.app/) (or your subscription URL) in **Chrome** or **Edge**.
+2. Open **DevTools** → **Network** tab → enable **Preserve log**.
+3. Filter by **Fetch/XHR** (or type `api` in the filter box).
+4. Navigate to **MLB player props** and open a market you care about (e.g. Pitching Outs, Strikeouts).
+5. Click a player row or refresh props so new requests appear.
+6. Inspect each XHR request:
+   - **Request URL** and query params
+   - **Request headers** — especially `Authorization`, `Cookie`, custom `x-*` tokens
+   - **Response** — JSON fields for player name, market, line, over/under percentages
+7. **Right-click** a representative request → **Copy** → **Copy as cURL** — save to a local notes file (never commit secrets).
+8. Repeat for 2–3 markets to confirm one endpoint vs per-market routes.
+9. Document: base URL, auth mechanism (cookie vs bearer), rate limits, and whether lines are American odds or implied % only.
+
+**Output of Phase 1:** a short internal doc (or README subsection update) with endpoint templates and sample response keys — enough to implement `fetch_pickfinder.py` without guessing.
 
 ---
 
@@ -1268,7 +1413,7 @@ Requires V1 feature files and models in `models/v1/`.
 
 All markets below are fetched from The Odds API (`odds_api.py` `PROP_MARKETS`), trained in `train.py`, and scored in `predict.py` / `prop_scoring.py` (`MODEL_MAP`).
 
-**UI note:** `batter_home_runs` is still trained and written to prediction CSVs, but is **hidden from Streamlit** via `EXCLUDED_UI_MARKETS` in [`ui/market_filters.py`](ui/market_filters.py) (board, player pages, top lists, version compare, Pick Builder).
+**UI note:** `batter_home_runs` and `batter_stolen_bases` are still trained and written to prediction CSVs, but are **hidden from Streamlit** via `EXCLUDED_UI_MARKETS` in [`ui/market_filters.py`](ui/market_filters.py) (board, player pages, top lists, version compare, Pick Builder).
 
 | Odds API market | Display name | Model file | Role | UI |
 |-----------------|--------------|------------|------|-----|
@@ -1279,7 +1424,7 @@ All markets below are fetched from The Odds API (`odds_api.py` `PROP_MARKETS`), 
 | `batter_runs_scored` | Runs | `batter_runs.pkl` | Batter | shown |
 | `batter_walks` | Walks | `batter_walks.pkl` | Batter | shown |
 | `batter_hits_runs_rbis` | Hits + Runs + RBIs | `batter_hits_runs_rbis.pkl` | Batter | shown |
-| `batter_stolen_bases` | Stolen Bases | `batter_stolen_bases.pkl` | Batter | shown |
+| `batter_stolen_bases` | Stolen Bases | `batter_stolen_bases.pkl` | Batter | hidden |
 | `pitcher_strikeouts` | Strikeouts | `pitcher_strikeouts.pkl` | Pitcher | shown |
 | `pitcher_walks` | Walks | `pitcher_walks.pkl` | Pitcher | shown |
 | `pitcher_hits_allowed` | Hits Allowed | `pitcher_hits_allowed.pkl` | Pitcher | shown |
@@ -1316,7 +1461,7 @@ The board always shows **one row per (player, market)** — the book with the hi
 **Hint:** To compare prices across books for one player/market, open the **[player page](#player-pages-uplayerpy)** — it lists all books/lines per market with consensus line, devigged %, and best book/EV columns.
 
 - **Sidebar:** V1 / V2 model version selector; **[Pick Builder](#pick-builder-uipick_builderpy)** favorites slip
-- **Market type** (always visible): full-width multiselect at the top — limits prop categories (Hits, **Batter Walks** / **Pitcher Walks** as distinct labels via [`ui/market_filters.py`](ui/market_filters.py)); synced with Top Over / Under previews. Home run props are excluded from the UI (`EXCLUDED_UI_MARKETS`).
+- **Market type** (always visible): full-width multiselect at the top — limits prop categories (Hits, **Batter Walks** / **Pitcher Walks** as distinct labels via [`ui/market_filters.py`](ui/market_filters.py)); synced with Top Over / Under previews. Home runs and stolen bases are excluded from the UI (`EXCLUDED_UI_MARKETS`).
 - **Filters & columns** popover: minimum Edge / EV sliders and **Show columns** visibility
 - **Active filter chips:** when any filter is on, a summary row shows **Active filters:** with each constraint as a chip and a **Clear all filters** button
 - **Filter by column** expander: labeled filters in a 3-column grid for every table column except Market — player text search, game/book multiselect, side, line/odds ranges, min Over % / Under % / Model % / Market % / Devigged % / L5–L10 % / Edge / Consensus Edge / EV / Best EV, etc. Active filters show **subscript indices** (e.g. Line₂) matching the chip order
@@ -1324,6 +1469,8 @@ The board always shows **one row per (player, market)** — the book with the hi
 - **AND logic:** Market type, min Edge, min EV, and every column filter combine with **AND** — a row must pass all active filters
 - **Summary metrics:** Prop count, best edge, best EV, unique players (reflect Market / Edge / EV filters)
 - **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); links to full lists and **[Version compare](#version-compare-v1--v2--v3--main)**
+- **Top 10 batter score** — highest Batter Score among batters on the slate (best row per player; respects Market type filter; independent of Edge / EV filters)
+- **Batter score by game** — same columns as Top 10 for **all** slate batters; **Game** selectbox filters to one matchup (e.g. `Toronto Blue Jays @ New York Yankees`)
 - **Columns:** Player (link to detail page), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), **Pred #** and **Dist Over %** on pitcher K/walks (dual-head), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
 - **L5 / L10 %:** Share of the player's last 5 / 10 completed games where the stat strictly exceeded the posted line (from feature parquets via [`ui/player_stats.py`](ui/player_stats.py))
 

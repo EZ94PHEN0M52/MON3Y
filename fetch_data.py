@@ -13,6 +13,7 @@ from odds_api import (
     GAME_MARKETS,
     OddsApiQuotaError,
     get_event_game_lines,
+    get_event_prizepicks_fantasy,
     get_event_props,
     get_events,
     normalize_event,
@@ -28,6 +29,7 @@ from utils import (
     require_live_fetch,
     statcast_needs_refresh,
     statcast_raw_path,
+    warn_sp_prop_coverage,
 )
 
 
@@ -147,6 +149,64 @@ def _exit_props_fetch_failure(
     sys.exit(1)
 
 
+def _save_prizepicks_fantasy_lines(
+    rows,
+    output_file,
+):
+    """Persist PrizePicks batter fantasy score lines (Over side, one row per player)."""
+    if not rows:
+        if output_file.exists():
+            print(
+                "WARNING: No PrizePicks fantasy rows collected; "
+                "keeping existing cache at",
+                output_file,
+            )
+        else:
+            print(
+                "WARNING: No PrizePicks fantasy rows collected."
+            )
+        return
+
+    df = pd.DataFrame(rows)
+    df = df[
+        df["market"].eq("batter_fantasy_score")
+        & df["side"].astype(str).str.lower().eq("over")
+        & df["line"].notna()
+    ].copy()
+
+    if df.empty:
+        print(
+            "WARNING: PrizePicks fantasy fetch returned no Over lines."
+        )
+        return
+
+    df = (
+        df.sort_values("fetched_at")
+        .drop_duplicates(
+            subset=["player"],
+            keep="last",
+        )
+        .reset_index(drop=True)
+    )
+
+    if "fetched_at" not in df.columns:
+        df["fetched_at"] = pd.NaT
+
+    df["fetched_at"] = df["fetched_at"].fillna(
+        pd.Timestamp.now(tz="UTC").isoformat()
+    )
+
+    df.to_parquet(
+        output_file,
+        index=False,
+    )
+
+    print(
+        f"Saved {len(df):,} PrizePicks fantasy lines:",
+        output_file,
+    )
+
+
 def fetch_current_props():
     require_live_fetch("live sportsbook props (Odds API)")
 
@@ -166,6 +226,10 @@ def fetch_current_props():
         PROCESSED_DIR /
         "current_props.parquet"
     )
+    pp_output_file = (
+        PROCESSED_DIR /
+        "prizepicks_fantasy_lines.parquet"
+    )
 
     try:
         events = get_events()
@@ -182,6 +246,7 @@ def fetch_current_props():
     )
 
     all_rows = []
+    pp_rows = []
     events_failed = 0
     quota_exhausted = False
 
@@ -212,6 +277,21 @@ def fetch_current_props():
             all_rows.extend(
                 rows
             )
+
+            try:
+                pp_event_data = get_event_prizepicks_fantasy(
+                    event["id"]
+                )
+                pp_rows.extend(
+                    normalize_event(
+                        pp_event_data
+                    )
+                )
+            except Exception as pp_exc:
+                print(
+                    "WARNING: PrizePicks fantasy fetch failed:",
+                    redact_api_key(pp_exc),
+                )
 
             # Avoid hammering the API.
             time.sleep(0.1)
@@ -319,6 +399,11 @@ def fetch_current_props():
         index=False
     )
 
+    _save_prizepicks_fantasy_lines(
+        pp_rows,
+        pp_output_file,
+    )
+
     snapshot_path = save_live_snapshot(df)
 
     print()
@@ -337,6 +422,11 @@ def fetch_current_props():
             "Snapshot:",
             snapshot_path,
         )
+
+    warn_sp_prop_coverage(
+        df,
+        context="after props fetch",
+    )
 
     return df
 

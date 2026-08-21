@@ -25,10 +25,12 @@ from distributional import (
 )
 from utils import (
     batter_features_path,
-    pitcher_features_path,
-    predictions_path,
-    predictions_best_path,
     normalize_version,
+    predictions_best_path,
+    predictions_path,
+    pitcher_features_path,
+    resolve_feature_path,
+    warn_sp_prop_coverage,
 )
 
 
@@ -47,17 +49,35 @@ def prepare_board(
         "current_props.parquet"
     )
 
-    batter_path = batter_features_path(
+    batter_path = resolve_feature_path(
         start_date,
         end_date,
-        version
+        version,
+        role="batter",
     )
 
-    pitcher_path = pitcher_features_path(
+    pitcher_path = resolve_feature_path(
         start_date,
         end_date,
-        version
+        version,
+        role="pitcher",
     )
+
+    if not batter_path.exists():
+        raise FileNotFoundError(
+            f"No batter feature parquet for {start_date} → {end_date} "
+            f"({version}). Run:\n"
+            f"  python scripts/ensure_features.py --start {start_date} "
+            f"--end {end_date} --version {version} --fix"
+        )
+
+    if not pitcher_path.exists():
+        raise FileNotFoundError(
+            f"No pitcher feature parquet for {start_date} → {end_date} "
+            f"({version}). Run:\n"
+            f"  python scripts/ensure_features.py --start {start_date} "
+            f"--end {end_date} --version {version} --fix"
+        )
 
     props = pd.read_parquet(
         props_path
@@ -120,6 +140,11 @@ def generate_predictions(
     )
 
     props = attach_consensus_to_props(props)
+
+    warn_sp_prop_coverage(
+        props,
+        context="before predict",
+    )
 
     props = compute_movement_features(
         props,

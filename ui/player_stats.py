@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 
 from ui.market_filters import EXCLUDED_UI_MARKETS
-from utils import PROCESSED_DIR, normalize_version
+from utils import PROCESSED_DIR, normalize_player_key, normalize_version
+
+PRIZEPICKS_FANTASY_LINES_PATH = (
+    PROCESSED_DIR / "prizepicks_fantasy_lines.parquet"
+)
 
 MARKET_STAT_MAP = {
     "batter_hits": ("batter", "hits"),
@@ -94,12 +98,11 @@ def get_last_n_games(player_name, market, version="v2", n=10):
     if "player_name" not in features.columns or stat_col not in features.columns:
         return None
 
-    name = str(player_name).strip().lower()
+    name = _player_key(player_name)
     player_rows = features[
         features["player_name"]
         .astype(str)
-        .str.strip()
-        .str.lower()
+        .map(_player_key)
         .eq(name)
     ]
 
@@ -177,7 +180,7 @@ def get_stat_history(
 
 
 def _player_key(name):
-    return str(name).strip().lower()
+    return normalize_player_key(name)
 
 
 def _fuzzy_player_key(player_name, candidate_keys):
@@ -189,11 +192,16 @@ def _fuzzy_player_key(player_name, candidate_keys):
     if key in candidate_keys:
         return key
 
-    last_name = key.split()[-1]
+    parts = key.split()
+    if len(parts) < 2:
+        return None
+
+    first_name, last_name = parts[0], parts[-1]
     matches = [
         candidate
         for candidate in candidate_keys
-        if last_name in candidate.split()
+        if candidate.split()[-1] == last_name
+        and candidate.split()[0] == first_name
     ]
 
     if len(matches) == 1:
@@ -223,6 +231,111 @@ def _format_l5_l10_pct(l5_pct, l10_pct):
         return f"{value * 100:.0f}%"
 
     return f"{_fmt(l5_pct)} / {_fmt(l10_pct)}"
+
+
+def prizepicks_fantasy_score(row) -> float:
+    """
+    PrizePicks MLB hitter fantasy score from box-score stats.
+
+    Uses singles/doubles/triples split implied by hits + total bases (exact
+    when the player had no triples; HBP omitted — not in feature parquets).
+    """
+    hits = int(row.get("hits", 0) or 0)
+    home_runs = int(row.get("home_runs", 0) or 0)
+    total_bases = float(row.get("total_bases", 0) or 0)
+    runs = int(row.get("runs", 0) or 0)
+    rbi = int(row.get("rbi", 0) or 0)
+    walks = int(row.get("walks", 0) or 0)
+    stolen_bases = int(row.get("stolen_bases", 0) or 0)
+
+    hit_points = hits + (2 * total_bases) + home_runs
+    return float(
+        hit_points
+        + (2 * (runs + rbi + walks))
+        + (5 * stolen_bases)
+    )
+
+
+def _pp_lines_cache_key():
+    path = PRIZEPICKS_FANTASY_LINES_PATH
+    if not path.exists():
+        return (None, 0)
+    return (str(path), path.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=4)
+def _prizepicks_fantasy_line_map(cache_key):
+    path_str, _mtime = cache_key
+    if path_str is None:
+        return {}
+
+    lines = pd.read_parquet(path_str)
+    if lines.empty or "player" not in lines.columns:
+        return {}
+
+    line_map = {}
+    for player, line in zip(lines["player"], lines["line"]):
+        if pd.isna(player) or pd.isna(line):
+            continue
+        line_map[_player_key(player)] = float(line)
+
+    return line_map
+
+
+def lookup_prizepicks_fantasy_line(player_name):
+    """Return the PrizePicks fantasy score line for *player_name*, or None."""
+    line_map = _prizepicks_fantasy_line_map(_pp_lines_cache_key())
+    if not line_map:
+        return None
+
+    player_key = _fuzzy_player_key(player_name, line_map.keys())
+    if player_key is None:
+        return None
+
+    return line_map[player_key]
+
+
+def rolling_pp_fantasy_over_rates(player_name, line, version="v2"):
+    """L5/L10 over-rates vs a PrizePicks fantasy score line."""
+    cache = _kind_player_game_cache(
+        _kind_player_cache_key("batter", version)
+    )
+    if not cache:
+        return np.nan, np.nan
+
+    player_key = _fuzzy_player_key(player_name, cache.keys())
+    if player_key is None:
+        return np.nan, np.nan
+
+    player_games = cache[player_key].sort_values("game_date")
+    values = [
+        prizepicks_fantasy_score(row)
+        for _, row in player_games.iterrows()
+    ]
+    line = float(line)
+
+    return (
+        _over_rate(values, line, 5),
+        _over_rate(values, line, 10),
+    )
+
+
+def batter_score_l5_l10_pct(player_name, version="v2", fallback=None):
+    """
+    L5/L10 % vs PrizePicks fantasy line when available; else *fallback* text.
+    """
+    pp_line = lookup_prizepicks_fantasy_line(player_name)
+    if pp_line is None:
+        if fallback is None or (isinstance(fallback, float) and pd.isna(fallback)):
+            return "—"
+        return fallback
+
+    l5_pct, l10_pct = rolling_pp_fantasy_over_rates(
+        player_name,
+        pp_line,
+        version=version,
+    )
+    return _format_l5_l10_pct(l5_pct, l10_pct)
 
 
 def _build_player_game_cache(features):

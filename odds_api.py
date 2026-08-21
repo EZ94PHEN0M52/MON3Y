@@ -27,6 +27,16 @@ PROP_MARKETS = [
     "pitcher_earned_runs",
 ]
 
+# PrizePicks DFS fantasy score (us_dfs region only).
+PRIZEPICKS_FANTASY_MARKETS = [
+    "batter_fantasy_score",
+]
+
+
+# US books split across two Odds API regions. Some player props (notably
+# pitcher_walks) are posted only on us2 books (Fliff, Hard Rock Bet).
+PROP_REGIONS = "us,us2"
+
 
 # Game-level markets (totals, run lines) — used as context features, not
 # standalone betting models in Phase 5.
@@ -236,7 +246,7 @@ def get_event_odds(
 
     params = {
         "apiKey": ODDS_API_KEY,
-        "regions": "us",
+        "regions": PROP_REGIONS,
         "markets": ",".join(
             markets
         ),
@@ -259,6 +269,34 @@ def get_event_props(
     return get_event_odds(
         event_id,
         markets,
+    )
+
+
+def get_event_prizepicks_fantasy(
+    event_id,
+    markets=None,
+):
+    """PrizePicks batter fantasy score lines (Odds API us_dfs region)."""
+    if markets is None:
+        markets = PRIZEPICKS_FANTASY_MARKETS
+
+    url = (
+        f"{ODDS_API_BASE}/sports/"
+        f"{MLB_SPORT}/events/"
+        f"{event_id}/odds"
+    )
+
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": "us_dfs",
+        "bookmakers": "prizepicks",
+        "markets": ",".join(markets),
+        "oddsFormat": "american",
+    }
+
+    return odds_request(
+        url,
+        params,
     )
 
 

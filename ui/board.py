@@ -16,10 +16,14 @@ from ui.formatting import (
 from ui.glossary import EDGE_CALLOUT, GLOSSARY
 from ui.formatting import market_label
 from ui.market_filters import render_market_multiselect
+from ui.batter_score_board import (
+    render_game_batter_scores,
+    render_top_batter_scores,
+)
 from ui.pick_builder import render_board_add_controls
 
-DEFAULT_MIN_EDGE = 0.03
-DEFAULT_MIN_EV = 0.05
+DEFAULT_MIN_EDGE = 0.0
+DEFAULT_MIN_EV = 0.0
 MAX_SORT_COLUMNS = 3
 _SUBSCRIPTS = "₀₁₂₃₄₅₆₇₈₉"
 
@@ -361,11 +365,11 @@ def _active_filter_labels(key_prefix, df):
         labels.append(f"Market: {market_names}")
 
     min_edge = st.session_state.get(f"{key_prefix}_min_edge", DEFAULT_MIN_EDGE)
-    if min_edge != DEFAULT_MIN_EDGE:
+    if min_edge > DEFAULT_MIN_EDGE:
         labels.append(f"Min edge: {min_edge * 100:.0f}%")
 
     min_ev = st.session_state.get(f"{key_prefix}_min_ev", DEFAULT_MIN_EV)
-    if min_ev != DEFAULT_MIN_EV:
+    if min_ev > DEFAULT_MIN_EV:
         labels.append(f"Min EV: {min_ev * 100:.0f}%")
 
     for spec in _column_filter_specs(df):
@@ -416,6 +420,14 @@ def _init_board_filter_state(key_prefix):
         st.session_state[f"{key_prefix}_min_edge"] = DEFAULT_MIN_EDGE
     if f"{key_prefix}_min_ev" not in st.session_state:
         st.session_state[f"{key_prefix}_min_ev"] = DEFAULT_MIN_EV
+
+    migrate_key = f"{key_prefix}_threshold_defaults_migrated"
+    if not st.session_state.get(migrate_key):
+        if st.session_state.get(f"{key_prefix}_min_edge") == 0.03:
+            st.session_state[f"{key_prefix}_min_edge"] = DEFAULT_MIN_EDGE
+        if st.session_state.get(f"{key_prefix}_min_ev") == 0.05:
+            st.session_state[f"{key_prefix}_min_ev"] = DEFAULT_MIN_EV
+        st.session_state[migrate_key] = True
 
 
 def _clear_board_filters(key_prefix):
@@ -956,7 +968,7 @@ def _ranking_column_config():
 
 
 def _apply_data_filters(df, markets, min_edge, min_ev, *, dedupe=True):
-    """Top-level filters: market type, min edge, min EV (all AND-combined)."""
+    """Top-level filters: market type, optional min edge/EV (all AND-combined)."""
     filtered = df.copy()
 
     if markets:
@@ -1036,8 +1048,8 @@ def _render_probability_rankings(filtered, key_prefix):
 
     st.markdown("##### Highest model probabilities")
     st.caption(
-        "Top 10 props by **Over %** and **Under %** from the current Market / "
-        "Edge / EV filters (one best book per player and market). "
+        "Top 10 props by **Over %** and **Under %** after optional sidebar "
+        "filters (one best book per player and market). "
         "Open a title to view the **full ranked list**. "
         f"{GLOSSARY['over_pct']} "
         f"{GLOSSARY['under_pct']}"
@@ -1133,6 +1145,7 @@ def render_board(df, version):
         st.session_state.get(f"{key_prefix}_markets", []),
         st.session_state.get(f"{key_prefix}_min_edge", DEFAULT_MIN_EDGE),
         st.session_state.get(f"{key_prefix}_min_ev", DEFAULT_MIN_EV),
+        dedupe=True,
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -1173,6 +1186,9 @@ def render_board(df, version):
             st.info("No props meet the current column filters.")
     else:
         st.info("No props meet the current filters.")
+
+    render_top_batter_scores(df, key_prefix, version=version)
+    render_game_batter_scores(df, key_prefix, version=version)
 
     st.divider()
     st.caption(EDGE_CALLOUT)

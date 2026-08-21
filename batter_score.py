@@ -265,6 +265,8 @@ class BatterInputs:
     opposing_sp_name: Optional[str] = None
     h2h_pa: Optional[int] = None
     h2h_avg_raw_points: Optional[float] = None
+    h2h_hits: Optional[int] = None
+    h2h_ab: Optional[int] = None
     team_opp_earned_runs_proxy: Optional[float] = None
     max_raw_points_for_100: float = 6.0   # scaling benchmark for the 0-100 index
 
@@ -422,6 +424,8 @@ class BatterScoreResult:
     opposing_sp_era_l5: Optional[float] = None
     h2h_pa: Optional[int] = None
     h2h_avg_raw_points: Optional[float] = None
+    h2h_hits: Optional[int] = None
+    h2h_ab: Optional[int] = None
     sp_tbd: bool = False
     team_proxy_used: bool = False
 
@@ -657,6 +661,8 @@ def _compute_with_gates(
         opposing_sp_era_l5=batter.opponent_pitcher_era_l5,
         h2h_pa=batter.h2h_pa,
         h2h_avg_raw_points=batter.h2h_avg_raw_points,
+        h2h_hits=batter.h2h_hits,
+        h2h_ab=batter.h2h_ab,
         sp_tbd=sp_tbd,
         team_proxy_used=team_proxy,
     )

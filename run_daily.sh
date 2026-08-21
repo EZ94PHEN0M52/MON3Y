@@ -10,6 +10,7 @@
 #   ./run_daily.sh --skip-probables # skip MLB probable SP fetch
 #   ./run_daily.sh --streamlit  # launch Streamlit app after pipeline
 #   ./run_daily.sh --train --streamlit
+#   ./run_daily.sh --streamlit --port 8502
 #
 # Intraday snapshots (Phase 4): fetch_data.py --props appends to
 # data/raw/odds/snapshots/props_YYYYMMDD_HHMMSS.parquet on each run.
@@ -39,31 +40,45 @@ RUN_STREAMLIT=false
 SKIP_PROPS=false
 SKIP_GAME_LINES=false
 SKIP_PROBABLES=false
+STREAMLIT_PORT=8501
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --train)
       RUN_TRAIN=true
+      shift
       ;;
     --streamlit)
       RUN_STREAMLIT=true
+      shift
       ;;
     --skip-props)
       SKIP_PROPS=true
+      shift
       ;;
     --skip-game-lines)
       SKIP_GAME_LINES=true
+      shift
       ;;
     --skip-probables)
       SKIP_PROBABLES=true
+      shift
+      ;;
+    --port)
+      if [[ -z "${2:-}" || "$2" == --* ]]; then
+        echo "Error: --port requires a port number" >&2
+        exit 1
+      fi
+      STREAMLIT_PORT="$2"
+      shift 2
       ;;
     -h|--help)
-      sed -n '2,10p' "$0" | sed 's/^# \?//'
+      sed -n '2,11p' "$0" | sed 's/^# \?//'
       exit 0
       ;;
     *)
-      echo "Unknown option: $arg" >&2
-      echo "Usage: $0 [--train] [--skip-props] [--streamlit]" >&2
+      echo "Unknown option: $1" >&2
+      echo "Usage: $0 [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--streamlit] [--port PORT]" >&2
       exit 1
       ;;
   esac
@@ -128,6 +143,6 @@ echo ""
 echo "=== Pipeline complete ==="
 
 if $RUN_STREAMLIT; then
-  echo ">>> Launching Streamlit at http://localhost:8501 ..."
-  streamlit run app.py
+  echo ">>> Launching Streamlit at http://localhost:${STREAMLIT_PORT} ..."
+  streamlit run app.py --server.port "$STREAMLIT_PORT"
 fi
