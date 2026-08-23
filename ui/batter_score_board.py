@@ -12,7 +12,11 @@ from batter_score_data import (
 from ui.batter_score import format_batter_score_display
 from ui.formatting import format_commence_time, player_path
 from ui.glossary import GLOSSARY
-from ui.player_stats import BATTER_MARKETS, batter_score_l5_l10_pct
+from ui.player_stats import (
+    BATTER_MARKETS,
+    batter_score_l5_l10_pct,
+    format_prizepicks_fantasy_line,
+)
 
 # Board "Vs pitcher" column — lower bar than MIN_PA_H2H (10) used in scoring.
 MIN_PA_H2H_BOARD = 3
@@ -79,73 +83,58 @@ def build_top_batter_score_df(
     Uses enrichment columns from load_board_data(); lookup_batter_score fills
     opposing SP and H2H fields not stored on the predictions dataframe.
     """
-    if df.empty or "batter_score" not in df.columns:
+    ranked = _prepare_batter_score_slate(df, markets=markets)
+    if ranked.empty:
         return pd.DataFrame()
 
-    batters = df[df["market"].isin(BATTER_MARKETS)].copy()
-    if markets:
-        batters = batters[batters["market"].isin(markets)]
-    if batters.empty:
-        return pd.DataFrame()
+    ranked = ranked.head(10)
+    result = pd.DataFrame(_rows_from_batter_slate(ranked, version))
+    return result.drop(columns=["_game"], errors="ignore")
 
-    batters = batters.dropna(subset=["batter_score"])
-    if batters.empty:
-        return pd.DataFrame()
 
-    best_idx = batters.groupby("player")["batter_score"].idxmax()
-    ranked = (
-        batters.loc[best_idx]
-        .sort_values("batter_score", ascending=False)
-        .head(10)
-        .reset_index(drop=True)
+def _build_batter_score_row(row, version: str) -> dict:
+    game_context = _row_game_context(row)
+    result = lookup_batter_score(
+        row["player"],
+        version=version,
+        game_context=game_context,
+    )
+    h2h_pa, h2h_hits, h2h_ab = lookup_h2h_board_stats(
+        row["player"],
+        version=version,
+        game_context=game_context,
     )
 
-    rows = []
-    for _, row in ranked.iterrows():
-        game_context = _row_game_context(row)
-        result = lookup_batter_score(
-            row["player"],
-            version=version,
-            game_context=game_context,
-        )
-        h2h_pa, h2h_hits, h2h_ab = lookup_h2h_board_stats(
-            row["player"],
-            version=version,
-            game_context=game_context,
-        )
+    opposing = "TBD"
+    if result and result.opposing_sp_name:
+        opposing = result.opposing_sp_name
 
-        opposing = "TBD"
-        if result and result.opposing_sp_name:
-            opposing = result.opposing_sp_name
+    l5_l10 = batter_score_l5_l10_pct(
+        row["player"],
+        version=version,
+        fallback=row.get("l5_l10_pct"),
+    )
+    if pd.isna(l5_l10) or l5_l10 is None:
+        l5_l10 = "—"
 
-        l5_l10 = batter_score_l5_l10_pct(
-            row["player"],
-            version=version,
-            fallback=row.get("l5_l10_pct"),
-        )
-        if pd.isna(l5_l10) or l5_l10 is None:
-            l5_l10 = "—"
-
-        rows.append(
-            {
-                "player_link": player_path(row["player"]),
-                "game_time": _format_game_time(row),
-                "opposing_sp": opposing,
-                "vs_pitcher": _format_vs_pitcher(
-                    result,
-                    h2h_pa=h2h_pa,
-                    h2h_hits=h2h_hits,
-                    h2h_ab=h2h_ab,
-                ),
-                "l5_l10_pct": l5_l10,
-                "batter_score_display": format_batter_score_display(
-                    row["batter_score"],
-                    row.get("batter_score_label") or "",
-                ),
-            }
-        )
-
-    return pd.DataFrame(rows)
+    return {
+        "player_link": player_path(row["player"]),
+        "game_time": _format_game_time(row),
+        "opposing_sp": opposing,
+        "vs_pitcher": _format_vs_pitcher(
+            result,
+            h2h_pa=h2h_pa,
+            h2h_hits=h2h_hits,
+            h2h_ab=h2h_ab,
+        ),
+        "pp_fantasy_line": format_prizepicks_fantasy_line(row["player"]),
+        "l5_l10_pct": l5_l10,
+        "batter_score_display": format_batter_score_display(
+            row["batter_score"],
+            row.get("batter_score_label") or "",
+        ),
+        "_game": row.get("game") or "",
+    }
 
 
 def render_top_batter_scores(
@@ -166,9 +155,9 @@ def render_top_batter_scores(
     caption = (
         "Highest Batter Score among batters on today's slate "
         "(respects Market type filter; independent of Edge / EV filters). "
-        "L5 / L10 % uses each player's PrizePicks fantasy score line when "
-        "available (from the daily props fetch); otherwise falls back to the "
-        "market line on that player's top prop row. "
+        "**PP fantasy** is each hitter's posted PrizePicks fantasy score line. "
+        "L5 / L10 % is the over-rate vs that line when available; otherwise "
+        "falls back to the market line on that player's top prop row. "
     )
     if is_batter_score_validated():
         caption += GLOSSARY["batter_score_validated"]
@@ -209,6 +198,10 @@ def _batter_score_table_column_config():
                 f"(hits/AB) when PA ≥ {MIN_PA_H2H_BOARD}; otherwise SP ERA "
                 "over the pitcher's last five starts."
             ),
+        ),
+        "pp_fantasy_line": st.column_config.TextColumn(
+            "PP fantasy",
+            help=GLOSSARY["pp_fantasy_line"],
         ),
         "l5_l10_pct": st.column_config.TextColumn(
             "L5 / L10 %",
@@ -255,52 +248,10 @@ def _prepare_batter_score_slate(
 
 
 def _rows_from_batter_slate(ranked: pd.DataFrame, version: str) -> list[dict]:
-    rows = []
-    for _, row in ranked.iterrows():
-        game_context = _row_game_context(row)
-        result = lookup_batter_score(
-            row["player"],
-            version=version,
-            game_context=game_context,
-        )
-        h2h_pa, h2h_hits, h2h_ab = lookup_h2h_board_stats(
-            row["player"],
-            version=version,
-            game_context=game_context,
-        )
-
-        opposing = "TBD"
-        if result and result.opposing_sp_name:
-            opposing = result.opposing_sp_name
-
-        l5_l10 = batter_score_l5_l10_pct(
-            row["player"],
-            version=version,
-            fallback=row.get("l5_l10_pct"),
-        )
-        if pd.isna(l5_l10) or l5_l10 is None:
-            l5_l10 = "—"
-
-        rows.append(
-            {
-                "player_link": player_path(row["player"]),
-                "game_time": _format_game_time(row),
-                "opposing_sp": opposing,
-                "vs_pitcher": _format_vs_pitcher(
-                    result,
-                    h2h_pa=h2h_pa,
-                    h2h_hits=h2h_hits,
-                    h2h_ab=h2h_ab,
-                ),
-                "l5_l10_pct": l5_l10,
-                "batter_score_display": format_batter_score_display(
-                    row["batter_score"],
-                    row.get("batter_score_label") or "",
-                ),
-                "_game": row.get("game") or "",
-            }
-        )
-    return rows
+    return [
+        _build_batter_score_row(row, version)
+        for _, row in ranked.iterrows()
+    ]
 
 
 def build_all_batter_score_df(
@@ -339,6 +290,7 @@ def render_game_batter_scores(
     st.markdown("##### Batter score by game")
     caption = (
         "All batters on today's slate (best Batter Score row per player). "
+        "**PP fantasy** is each hitter's posted PrizePicks fantasy score line. "
         "Select a game to narrow the list. Respects Market type filter like "
         "Top 10; independent of Edge / EV filters."
     )

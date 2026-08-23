@@ -5,7 +5,7 @@
 - **GitHub:** [EZ94PHEN0M52/MON3Y](https://github.com/EZ94PHEN0M52/MON3Y) — tags **`v1`**, **`v2`**, **`v3`** mark frozen baselines; active development is on **`main`**
 - **Frozen local copies:** [`mlb-prop-model-v1/`](../mlb-prop-model-v1), [`mlb-prop-model-v2/`](../mlb-prop-model-v2), [`mlb-prop-model-v3/`](../mlb-prop-model-v3/)
 
-**Table of contents:** [Quick start](#quick-start-for-beginners) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
+**Table of contents:** [Quick start](#quick-start-for-beginners) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
 
 > **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder). For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
 
@@ -1157,7 +1157,7 @@ Dates are computed inside the script: `YESTERDAY=$(date -v-1d +%Y-%m-%d)` (macOS
 | `--skip-game-lines` | Game totals/spreads fetch | `current_game_lines.parquet` |
 | `--skip-probables` | MLB Stats API probables fetch | `daily_probables.parquet` |
 
-See [Command reference](#run_dailysh) for flag details. Evaluation ([`./run_evaluation.sh`](#evaluation-pipeline-phase-6)) is separate — not part of the daily pipeline.
+See [Command reference → run_daily.sh](#run_dailysh--pipeline-flags) for full flag details and common combinations. Evaluation ([`./run_evaluation.sh`](#evaluation-pipeline-phase-6)) is separate — not part of the daily pipeline.
 
 ---
 
@@ -1335,31 +1335,31 @@ To rebuild features without the full daily pipeline:
 python scripts/ensure_features.py --start 2026-03-25 --end $(date -v-1d +%Y-%m-%d) --version v2 --fix
 ```
 
-See [Feature validation](#feature-validation-scriptensure_featurespy) below for how stale detection works and what `--fix` checks.
+See [Feature validation (`ensure_features.py`)](#feature-validation-scriptsensure_featurespy) below for a short summary, or the full write-up in [Command reference → ensure_features.py](#ensure_featurespy--flags-and-fix).
 
 ---
 
 ### Feature validation (`scripts/ensure_features.py`)
 
-Standalone check/fix for feature parquets (also runs automatically at the start of `run_daily.sh` via `--fix`):
+Quick summary — **`ensure_features.py --fix`** is the pipeline’s “make sure player feature files are ready for predict” step. It runs automatically at the start of [`./run_daily.sh`](#run_dailysh--pipeline-flags).
 
 ```bash
 python scripts/ensure_features.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v1|v2]
 python scripts/ensure_features.py --start YYYY-MM-DD --end YYYY-MM-DD --version v2 --fix
 ```
 
-Without `--fix`, prints missing files or columns and exits with code 1. With `--fix`, removes stale parquets, fetches Statcast if the raw parquet is missing **or stops before `--end`**, rebuilds features, and re-checks. Rebuilds happen when:
+| Flag | Required | Meaning |
+|------|----------|---------|
+| `--start` | Yes | First date of the feature window (usually season opening day) |
+| `--end` | Yes | Last date to cover — use **yesterday**, not today |
+| `--version` | No | `v2` (default in daily pipeline) or `v1` |
+| `--fix` | No | If checks fail, delete stale parquets, refresh Statcast when needed, rebuild features, re-verify |
 
-- Required columns from `train.feature_columns_for_version()` are missing (includes V2 extras)
-- Parquet schema fingerprint no longer matches current column lists (`PARQUET_FEATURE_SCHEMA_VERSION` in `train.py`)
-- `build_features.py` or `features_v2.py` (V2) is newer than the parquet file
-- **Feature or Statcast data stops before `--end`** (common when `./run_daily.sh` runs before Baseball Savant has posted yesterday's games — re-run later or use `fetch_data.py --statcast --force`)
+Without `--fix`: prints problems and exits **1** ([`run_daily.sh`](#run_dailysh--pipeline-flags) aborts). With `--fix`: repairs when possible; aborts only if validation still fails after rebuild.
 
-Rebuilds are **not** triggered by edits to `train.py` training logic, `training_odds.py`, or derived-only model inputs (`market_implied_over_prob`, `line_vs_season_avg`).
+**Full documentation:** [Command reference → ensure_features.py](#ensure_featurespy--flags-and-fix) (checks, rebuild triggers, examples, what it does *not* do).
 
-When adding or renaming parquet columns, follow [Adding a new feature](#adding-a-new-feature) above (sync lists, bump `PARQUET_FEATURE_SCHEMA_VERSION`, then run `./run_daily.sh` or `ensure_features.py --fix`).
-
-**Example (current season, yesterday as end date):**
+**Example (current season):**
 
 ```bash
 YESTERDAY=$(date -v-1d +%Y-%m-%d)
@@ -1506,40 +1506,102 @@ Side-by-side **Over %** / **Under %** for V1, V2, V3, and Main — see [Quick st
 
 ## Command reference
 
-### run_daily.sh
+Detailed flags, when to use them, and how each script fits the daily pipeline. See also [Daily workflow (V2)](#daily-workflow-v2) for the ordered step list.
 
-See [Daily workflow (V2)](#daily-workflow-v2) for the full step list and skip-flag table. Quick reference:
+### run_daily.sh — pipeline flags
+
+Main entry point for the V2 daily loop. Activates `.venv` automatically — no manual `source` needed.
 
 ```bash
-./run_daily.sh [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--streamlit]
+./run_daily.sh [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--streamlit] [--port N]
 ./run_daily.sh --help
 ```
 
-No manual venv activate needed — sources `.venv/bin/activate` internally.
+**What it runs (in order):**
+
+| Step | Script | Skipped by |
+|------|--------|------------|
+| 1 | `scripts/ensure_features.py --fix` | Never — always runs |
+| 2 | `fetch_data.py --props` | `--skip-props` |
+| 3 | `fetch_data.py --game-lines` | `--skip-game-lines` |
+| 4 | `fetch_data.py --probables` | `--skip-probables` |
+| 5 | `train.py` (optional) | Only with `--train` |
+| 6 | `predict.py` | Never |
+| 7 | `streamlit run app.py` | Only with `--streamlit` |
+
+Date context: `SEASON_START=2026-03-25`, `YESTERDAY=$(date -v-1d +%Y-%m-%d)` (macOS). Feature validation and predict both use **season start → yesterday** — not today’s date.
+
+#### Flags
+
+| Flag | What it does | When to use |
+|------|--------------|-------------|
+| *(none)* | Full pipeline: ensure features → props → game lines → probables → predict | Normal morning run before or after lineups |
+| `--train` | Also runs `train.py` on a fixed 2025 window before predict | First setup, after feature/schema changes, or periodic retrain — **not** needed daily |
+| `--skip-props` | Skips Odds API prop fetch; uses `data/processed/current_props.parquet` | Odds API quota exhausted; games already started and you want pre-game lines; re-predict without burning credits |
+| `--skip-game-lines` | Skips totals/spreads fetch; uses `data/processed/current_game_lines.parquet` | Re-run predict with cached game context |
+| `--skip-probables` | Skips MLB Stats API probables; uses `data/processed/daily_probables.parquet` | SP list unchanged; save API calls on repeat runs |
+| `--streamlit` | Launches Streamlit after predict | Daily board workflow |
+| `--port N` | Streamlit port (default `8501`) | Multiple apps or port conflict — use with `--streamlit` |
+
+Skip flags are **independent** — combine as needed (e.g. all three skips + `--streamlit` for a fully offline re-predict from cache).
+
+#### Common combinations
+
+| Command | Use case |
+|---------|----------|
+| `./run_daily.sh` | Standard daily refresh |
+| `./run_daily.sh --streamlit` | Daily refresh + open board |
+| `./run_daily.sh --skip-props --streamlit` | Re-score slate with cached props (e.g. Sunday morning after Saturday games, or after games started) |
+| `./run_daily.sh --skip-props --skip-probables --streamlit` | Minimal API usage — only feature check may hit Statcast if stale |
+| `./run_daily.sh --train --streamlit` | Full retrain + predict + UI (infrequent) |
+| `./run_daily.sh --skip-props --skip-game-lines --skip-probables` | Offline predict only (requires valid cache + features) |
+
+**After games start:** A fresh `--props` fetch may pull live-game lines and overwrite pre-game cache. Use `--skip-props` to keep yesterday’s pre-game snapshot. Step 1 (`ensure_features --fix`) may still download Statcast if feature parquets stop before yesterday — see [ensure_features.py](#ensure_featurespy--flags-and-fix) below.
+
+**Quota / credits:** On `OUT_OF_USAGE_CREDITS`, `fetch_data.py --props` preserves existing `current_props.parquet` when non-empty. Run with `--skip-props` to continue the pipeline.
 
 ### run_evaluation.sh
 
-See [Evaluation pipeline (Phase 6)](#evaluation-pipeline-phase-6) for timing, prerequisites, and post-steps. Quick reference:
+See [Evaluation pipeline (Phase 6)](#evaluation-pipeline-phase-6) for timing, prerequisites, and post-steps.
 
 ```bash
 ./run_evaluation.sh [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--version v1|v2] [--min-edge N] [--min-ev N]
 ./run_evaluation.sh --help
 ```
 
-Must be invoked as `./run_evaluation.sh` (not bare `run_evaluation.sh` on zsh). Auto-activates `.venv`.
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--start` / `--end` | Script defaults | Backtest / calibration window |
+| `--version` | `v2` | Model version directory |
+| `--min-edge` / `--min-ev` | Script defaults | Filter thresholds for evaluation output |
 
-### fetch_data.py
+Must be invoked as `./run_evaluation.sh` (not bare `run_evaluation.sh` on zsh). Auto-activates `.venv`. **Not** part of the daily pipeline — run separately when fitting distributional models or running backtests.
+
+### fetch_data.py — live data flags
+
+Single script for all live fetches. Each flag is independent; pass only what you need.
 
 ```bash
 python fetch_data.py --props
 python fetch_data.py --game-lines
 python fetch_data.py --probables
-python fetch_data.py --statcast --start YYYY-MM-DD --end YYYY-MM-DD
+python fetch_data.py --statcast --start YYYY-MM-DD --end YYYY-MM-DD [--force]
+python fetch_data.py --props --game-lines --probables   # combine flags
 ```
 
-`--game-lines` fetches totals and spreads for today's MLB slate → `data/processed/current_game_lines.parquet`.
+| Flag | Requires | Output | API / source |
+|------|----------|--------|--------------|
+| `--props` | — | `data/processed/current_props.parquet` (+ optional snapshot under `data/raw/odds/snapshots/`) | Odds API — player props across books; merges **PrizePicks** standard markets from `us_dfs` when available |
+| `--game-lines` | — | `data/processed/current_game_lines.parquet` | Odds API — game totals and run lines for today’s slate |
+| `--probables` | — | `data/processed/daily_probables.parquet` | MLB Stats API — probable starting pitchers |
+| `--statcast` | `--start`, `--end` | `data/raw/statcast_{start}_{end}.parquet` | pybaseball → Baseball Savant pitch-level data |
+| `--force` | With `--statcast` | Re-downloads Statcast even when cache exists or when cached max date is before `--end` | Use after late-posted box scores or when `ensure_features --fix` reports stale data |
 
-`--probables` fetches probable starting pitchers → `data/processed/daily_probables.parquet` (MLB Stats API).
+**Notes:**
+
+- `--props` on zero rows: preserves non-empty cache and exits non-zero (quota / no games).
+- Probables use **US Eastern** schedule dates (aligned with slate `game_date` from commence times) — avoids UTC date mismatch that caused mass **SP TBD** on the batter score board.
+- Statcast is **not** run on every daily pass — only when [`ensure_features.py --fix`](#ensure_featurespy--flags-and-fix) detects missing or incomplete raw data.
 
 ### fetch_probables.py
 
@@ -1547,7 +1609,15 @@ python fetch_data.py --statcast --start YYYY-MM-DD --end YYYY-MM-DD
 python fetch_probables.py [--date YYYY-MM-DD]
 ```
 
-Standalone probable-SP fetch (also invoked by `fetch_data.py --probables`). Output feeds [Batter Score Phase C](#4-starting-pitcher-pipeline-phase-c). Use `--skip-probables` on [`run_daily.sh`](#daily-workflow-v2) to reuse cached `daily_probables.parquet`. If scores show **Partial · SP TBD** for everyone, see [team abbr mapping](#5-team-abbreviation-mapping-critical-fix) and [Troubleshooting](#troubleshooting).
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--date` | Today (Eastern) | Schedule date for probables lookup |
+
+Standalone probable-SP fetch (also invoked by `fetch_data.py --probables`). Output feeds [Batter Score Phase C](#4-starting-pitcher-pipeline-phase-c).
+
+When loading the board, `ensure_probables_for_props_slate()` can auto-fetch missing slate dates in the background. Terminal may print SP coverage warnings if probables are partial — the board still loads with **Partial · SP TBD** where SP data is missing (no blocking UI banner).
+
+Use `--skip-probables` on [`run_daily.sh`](#run_dailysh--pipeline-flags) to reuse cached probables. If everyone shows **SP TBD**, see [team abbr mapping](#5-team-abbreviation-mapping-critical-fix) and [Troubleshooting](#troubleshooting).
 
 ### fetch_historical_odds.py
 
@@ -1556,13 +1626,28 @@ python fetch_historical_odds.py --start YYYY-MM-DD --end YYYY-MM-DD [--markets m
 python fetch_historical_odds.py --start YYYY-MM-DD --end YYYY-MM-DD --game-lines [--force] [--dry-run]
 ```
 
-Fetches pre-game historical player props into `data/raw/odds/historical/date=YYYY-MM-DD/props.parquet`, or game lines into `.../game_lines.parquet` with `--game-lines`. See [Historical odds & backtesting](#historical-odds--backtesting).
+| Flag | Meaning |
+|------|---------|
+| `--start` / `--end` | Date range (required) |
+| `--markets` | Comma-separated prop market keys (props mode only) |
+| `--game-lines` | Fetch game lines instead of player props |
+| `--force` | Re-download even if parquet exists |
+| `--dry-run` | Print plan without writing |
+
+Writes `data/raw/odds/historical/date=YYYY-MM-DD/props.parquet` or `.../game_lines.parquet`. See [Historical odds & backtesting](#historical-odds--backtesting).
 
 ### scripts/backtest.py
 
 ```bash
 python scripts/backtest.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v2] [--min-edge 0.03] [--min-ev 0.05] [--market batter_hits]
 ```
+
+| Flag | Meaning |
+|------|---------|
+| `--start` / `--end` | Backtest window |
+| `--version` | `v1` or `v2` models |
+| `--min-edge` / `--min-ev` | Bet filters |
+| `--market` | Single market key (optional) |
 
 Scores historical props with trained models, joins Statcast outcomes from feature parquets, writes `data/backtest/backtest_{start}_{end}.csv`. Offline-safe with `DISABLE_LIVE_FETCH=1` when historical odds and features exist on disk.
 
@@ -1572,7 +1657,13 @@ Scores historical props with trained models, joins Statcast outcomes from featur
 python scripts/backtest_batter_score.py --start YYYY-MM-DD --end YYYY-MM-DD [--min-sample 100] [--min-spearman 0.15]
 ```
 
-Validates Batter Score vs same-game H+TB+BB outcomes; writes `data/backtest/batter_score_validation.json` (drives the player-page **✓ Batter Score validated** flag). Does not affect board edge or ranking. **Offline-only** — see [§8 Validation backtest](#8-validation-backtest-offline) and [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls).
+| Flag | Meaning |
+|------|---------|
+| `--start` / `--end` | Validation window |
+| `--min-sample` | Minimum paired rows |
+| `--min-spearman` | Pass threshold for rank correlation |
+
+Validates Batter Score vs same-game H+TB+BB outcomes; writes `data/backtest/batter_score_validation.json` (drives the player-page **✓ Batter Score validated** flag). **Offline-only** — see [§8 Validation backtest](#8-validation-backtest-offline).
 
 ### build_features.py
 
@@ -1580,15 +1671,106 @@ Validates Batter Score vs same-game H+TB+BB outcomes; writes `data/backtest/batt
 python build_features.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v1|v2]
 ```
 
-Default: `--version v2`
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--start` / `--end` | Required | Statcast window → rolling features per player per game |
+| `--version` | `v2` | Feature column set (`features_v2.py` for v2) |
 
-### ensure_features.py
+Normally invoked by `ensure_features.py --fix`, not run manually. Rebuilds `data/processed/batter_features_v2_{start}_{end}.parquet` and `pitcher_features_v2_{start}_{end}.parquet` (L3/L5/L10/L20/season rolls, opponent strength, etc.).
+
+### ensure_features.py — flags and `--fix`
+
+**`ensure_features.py --fix` is the pipeline’s “make sure player feature files are ready for predict” step.** It checks whether batter/pitcher feature parquets are complete and up to date; if not, it downloads Statcast and rebuilds them. [`run_daily.sh`](#run_dailysh--pipeline-flags) always runs this with `--fix` at step 1.
 
 ```bash
-python scripts/ensure_features.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v1|v2] [--fix]
+python scripts/ensure_features.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v1|v2]
+python scripts/ensure_features.py --start YYYY-MM-DD --end YYYY-MM-DD --version v2 --fix
 ```
 
-Validates feature parquets against `train.feature_columns_for_version()`; `--fix` removes stale files, rebuilds Statcast + features when files are missing, columns drift, or source code is newer. Used by `run_daily.sh` at pipeline start (pipeline aborts on failure).
+| Flag | Required | Meaning |
+|------|----------|---------|
+| `--start` | Yes | Window start (season opening day in daily pipeline) |
+| `--end` | Yes | Window end — **yesterday**, not today |
+| `--version` | No | `v2` (default in pipeline) or `v1` |
+| `--fix` | No | Repair: delete stale parquets, refresh Statcast if needed, rebuild, re-verify |
+
+#### What it checks (without `--fix`)
+
+For the date window `run_daily.sh` passes (**season start → yesterday**), it validates two files:
+
+- `data/processed/batter_features_v2_{start}_{end}.parquet`
+- `data/processed/pitcher_features_v2_{start}_{end}.parquet`
+
+It **fails** (exit code 1) if any of these are true:
+
+| Trigger | Meaning |
+|---------|---------|
+| **Missing file** | First run, or parquets were deleted |
+| **Missing columns** | `train.py` expects feature columns that aren’t in the parquet |
+| **Stale schema** | Feature schema version bumped (`PARQUET_FEATURE_SCHEMA_VERSION` in `train.py` — column lists changed) |
+| **Stale source code** | `build_features.py`, `features_v2.py` (v2), or `game_lines.py` edited after the parquet was built |
+| **Stale data** | Parquet’s latest `game_date` is behind `--end` (yesterday’s games not in features yet) |
+
+If issues are found **without** `--fix`, it prints the problems and exits — [`run_daily.sh`](#run_dailysh--pipeline-flags) aborts.
+
+Rebuilds are **not** triggered by edits to `train.py` training logic, `training_odds.py`, or derived-only model inputs (`market_implied_over_prob`, `line_vs_season_avg`). When adding parquet columns, follow [Adding a new feature](#adding-a-new-feature) (sync lists, bump schema version, then `--fix`).
+
+#### What `--fix` actually does
+
+When something is wrong:
+
+1. **Deletes** stale batter/pitcher feature parquets
+2. **Optionally re-downloads Statcast** via `fetch_data.py --statcast` (pybaseball → Baseball Savant) if raw data is missing or doesn’t cover through `--end`
+3. **Rebuilds features** via `build_features.py` → new rolling stats (L5/L10, opponent strength, etc.) per player per game
+4. **Re-checks** that the new parquets pass validation
+
+If everything is already OK, it prints **`Feature check OK`** and does nothing — no Statcast download, no rebuild. Most days this is a quick check with zero API calls.
+
+#### What those parquets are used for
+
+Everything downstream depends on them:
+
+| Consumer | Uses features for |
+|----------|-------------------|
+| **`predict.py`** | Match props to players, build model inputs |
+| **Batter score board** | Game logs, SP ERA L5, H2H vs pitcher |
+| **L5 / L10 % columns** | Recent game history vs lines |
+| **Player pages** | Stat history, game logs |
+
+No valid features → players get skipped at predict time or show no batter score (e.g. recent call-ups with zero Statcast history).
+
+#### Concrete example: Sunday morning after Saturday games
+
+Scenario: `./run_daily.sh --skip-props --streamlit` on Sunday morning after Saturday night games.
+
+1. `run_daily.sh` sets `YESTERDAY` to Saturday
+2. Feature parquets were last built Friday → latest game in parquet is Friday
+3. `ensure_features` sees: *“feature data stops before requested end date”*
+4. **`--fix` runs:**
+   - Fetches Statcast through Saturday (`statcast_2026-03-25_2026-08-21.parquet` updated)
+   - Rebuilds batter/pitcher features including Saturday box scores
+5. `predict.py` can score today’s slate with fresh rolling form
+
+**Without `--fix`:** pipeline would fail at step 1, or you’d predict using stale L5/L10 and outdated opponent stats.
+
+#### Other useful cases
+
+| Situation | Why `--fix` helps |
+|-----------|-------------------|
+| **Recent call-up** (e.g. new Yankee) | After a few MLB games, Statcast has data; `--fix` pulls it in so name matching + batter score can work (still needs ≥10 games for full batter score) |
+| **Feature code change** | Edited `features_v2.py` to add a rolling column; stale parquets rebuild on next daily run |
+| **Fresh clone / new machine** | No parquets exist; `--fix` does initial Statcast download + feature build (can take a while) |
+| **Schema bump** | Project updates `PARQUET_FEATURE_SCHEMA_VERSION`; old parquets are invalid and get rebuilt |
+| **Early-morning run** | Baseball Savant may not have posted yesterday yet; re-run later or `fetch_data.py --statcast --force` then `--fix` |
+
+#### What it does **not** do
+
+- Does **not** fetch odds/props (Odds API)
+- Does **not** fetch probables (MLB Stats API)
+- Does **not** retrain models (unless you pass `--train` on `run_daily.sh`)
+- Does **not** run heavy work on every `--skip-props` day if parquets are already current
+
+**Summary:** `--fix` keeps the **Statcast → feature parquets** layer healthy so predict and batter score have fresh player history.
 
 ### train.py
 
@@ -1596,7 +1778,13 @@ Validates feature parquets against `train.feature_columns_for_version()`; `--fix
 python train.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v1|v2] [--line-source auto|real|synthetic]
 ```
 
-Trains one LightGBM model per market (see [Supported prop markets](#supported-prop-markets)). Default `--line-source auto` uses **real posted consensus lines** from historical props when available; falls back to synthetic threshold grids. Adds derived inputs `market_implied_over_prob` and `line_vs_season_avg` at train/infer time. Saves to `models/v1/` or `models/v2/`.
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--start` / `--end` | Required | Training window (2025 dates for initial models) |
+| `--version` | `v2` | Output directory `models/v1/` or `models/v2/` |
+| `--line-source` | `auto` | `auto` = real historical lines when available, else synthetic grids; `real` / `synthetic` force one mode |
+
+Trains one LightGBM model per market (see [Supported prop markets](#supported-prop-markets)). Adds derived inputs `market_implied_over_prob` and `line_vs_season_avg` at train/infer time.
 
 ### predict.py
 
@@ -1604,17 +1792,23 @@ Trains one LightGBM model per market (see [Supported prop markets](#supported-pr
 python predict.py [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--version v1|v2]
 ```
 
-Defaults: `--start 2026-03-25`, `--end 2026-08-16`, `--version v2`.
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--start` | `2026-03-25` | Feature window start (must match built parquets) |
+| `--end` | Script default | Feature window end |
+| `--version` | `v2` | Model + feature version |
 
-Requires `data/processed/current_props.parquet` from `--props`. Output includes `over_probability`, `under_probability`, `model_probability`, `raw_model_probability`, `calibrated_probability` (same as model when calibrators exist), `market_probability` (raw implied), `devigged_market_prob`, `edge`, `ev`, `consensus_line`, `consensus_edge`, `best_book`, `best_odds`, `best_ev`, `is_best_price`, `opening_line`, `opening_odds`, `line_delta`, `odds_delta`, and `steam_flag`. Optional `dist_over_probability` and `predicted_rate` for hits/strikeouts when distributional models exist. Also writes `predictions_v2_best.csv` (best-price rows only).
+Requires `data/processed/current_props.parquet` from `--props`. Writes `predictions_v2.csv` (and `predictions_v2_best.csv`). Output columns include `over_probability`, `under_probability`, `model_probability`, `edge`, `ev`, `consensus_line`, `best_book`, `best_odds`, `steam_flag`, etc. Optional `dist_over_probability` and `predicted_rate` for hits/strikeouts when distributional models exist. Batter score is **not** in the CSV — computed at Streamlit load in `app.py`.
 
 ### app.py
 
 ```bash
-streamlit run app.py
+streamlit run app.py [--server.port 8501]
 ```
 
-Reads `predictions.csv` (V1) or `predictions_v2.csv` (V2) based on sidebar selection. Enrichment is cache-first — see [Cache-first data policy → Streamlit caching](#zero-api-run-patterns). See [Streamlit UI](#streamlit-ui).
+Reads `predictions.csv` (V1) or `predictions_v2.csv` (V2) from sidebar selection. Enrichment is cache-first — see [Cache-first data policy → Streamlit caching](#zero-api-run-patterns). See [Streamlit UI](#streamlit-ui).
+
+**Board columns (V2):** includes **PP fantasy** (PrizePicks fantasy score line from `prizepicks_fantasy_lines.parquet`) on the batter score board only — not mixed into main prop markets.
 
 ---
 

@@ -11,6 +11,7 @@ from utils import (
     american_to_implied_probability,
     expected_value,
     normalize_player_key,
+    strip_name_suffix,
 )
 
 
@@ -125,8 +126,10 @@ def fuzzy_player_match(
     ):
         return None
 
-    name = normalize_player_key(player_name)
-    normalized = candidates.map(normalize_player_key)
+    name = strip_name_suffix(normalize_player_key(player_name))
+    normalized = candidates.map(
+        lambda candidate: strip_name_suffix(normalize_player_key(candidate))
+    )
 
     exact = candidates[normalized.eq(name)]
 

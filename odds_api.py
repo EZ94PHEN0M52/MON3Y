@@ -272,14 +272,10 @@ def get_event_props(
     )
 
 
-def get_event_prizepicks_fantasy(
+def _get_event_prizepicks(
     event_id,
-    markets=None,
+    markets,
 ):
-    """PrizePicks batter fantasy score lines (Odds API us_dfs region)."""
-    if markets is None:
-        markets = PRIZEPICKS_FANTASY_MARKETS
-
     url = (
         f"{ODDS_API_BASE}/sports/"
         f"{MLB_SPORT}/events/"
@@ -297,6 +293,34 @@ def get_event_prizepicks_fantasy(
     return odds_request(
         url,
         params,
+    )
+
+
+def get_event_prizepicks_props(
+    event_id,
+    markets=None,
+):
+    """PrizePicks player props for standard markets (Odds API us_dfs region)."""
+    if markets is None:
+        markets = PROP_MARKETS
+
+    return _get_event_prizepicks(
+        event_id,
+        markets,
+    )
+
+
+def get_event_prizepicks_fantasy(
+    event_id,
+    markets=None,
+):
+    """PrizePicks batter fantasy score lines (Odds API us_dfs region)."""
+    if markets is None:
+        markets = PRIZEPICKS_FANTASY_MARKETS
+
+    return _get_event_prizepicks(
+        event_id,
+        markets,
     )
 
 

@@ -346,6 +346,33 @@ def test_canonical_odds_team_key_sp_lookup_with_abbr():
     assert sp_id == 800048
 
 
+def test_lookup_opposing_sp_accepts_adjacent_schedule_date():
+    from fetch_probables import lookup_opposing_sp
+
+    probables = pd.DataFrame(
+        {
+            "game_date": ["2026-08-23"],
+            "home_team": ["Colorado Rockies"],
+            "away_team": ["Cleveland Guardians"],
+            "home_sp_name": ["Gabriel Hughes"],
+            "away_sp_name": ["Tanner Bibee"],
+            "home_sp_id": [687312],
+            "away_sp_id": [676440],
+        }
+    )
+
+    sp_name, sp_id = lookup_opposing_sp(
+        probables,
+        "2026-08-22",
+        "Colorado Rockies",
+        "Cleveland Guardians",
+        "CLE",
+    )
+
+    assert sp_name == "Gabriel Hughes"
+    assert sp_id == 687312
+
+
 def test_build_game_context_from_game_string():
     from batter_score_data import build_game_context
 
@@ -358,6 +385,20 @@ def test_build_game_context_from_game_string():
     assert ctx["home_team"] == "New York Yankees"
     assert ctx["away_team"] == "Boston Red Sox"
     assert ctx["game_date"] == "2026-08-19"
+
+
+def test_build_game_context_uses_eastern_schedule_date():
+    from batter_score_data import build_game_context
+
+    ctx = build_game_context(
+        game="Cleveland Guardians @ Colorado Rockies",
+        commence_time="2026-08-23T00:11:00Z",
+        home_team="Colorado Rockies",
+        away_team="Cleveland Guardians",
+    )
+
+    assert ctx is not None
+    assert ctx["game_date"] == "2026-08-22"
 
 
 def test_enrich_with_batter_score_columns():
@@ -723,7 +764,9 @@ if __name__ == "__main__":
     test_build_opponent_pitcher_arsenal_synthetic()
     test_compute_batter_score_phase_d()
     test_canonical_odds_team_key_sp_lookup_with_abbr()
+    test_lookup_opposing_sp_accepts_adjacent_schedule_date()
     test_build_game_context_from_game_string()
+    test_build_game_context_uses_eastern_schedule_date()
     test_enrich_with_batter_score_columns()
     test_infer_player_kind()
     test_markets_for_kind_includes_stolen_bases()

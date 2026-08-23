@@ -185,12 +185,20 @@ def _player_key(name):
 
 def _fuzzy_player_key(player_name, candidate_keys):
     """Return a cache key for *player_name*, or None if no match."""
+    from utils import strip_name_suffix
+
     if not isinstance(player_name, str):
         return None
 
-    key = _player_key(player_name)
-    if key in candidate_keys:
-        return key
+    key = strip_name_suffix(_player_key(player_name))
+    stripped_candidates = {
+        candidate: strip_name_suffix(candidate)
+        for candidate in candidate_keys
+    }
+    if key in stripped_candidates.values():
+        for candidate, stripped in stripped_candidates.items():
+            if stripped == key:
+                return candidate
 
     parts = key.split()
     if len(parts) < 2:
@@ -199,9 +207,9 @@ def _fuzzy_player_key(player_name, candidate_keys):
     first_name, last_name = parts[0], parts[-1]
     matches = [
         candidate
-        for candidate in candidate_keys
-        if candidate.split()[-1] == last_name
-        and candidate.split()[0] == first_name
+        for candidate, stripped in stripped_candidates.items()
+        if stripped.split()[-1] == last_name
+        and stripped.split()[0] == first_name
     ]
 
     if len(matches) == 1:
@@ -293,6 +301,18 @@ def lookup_prizepicks_fantasy_line(player_name):
         return None
 
     return line_map[player_key]
+
+
+def format_prizepicks_fantasy_line(player_name) -> str:
+    """Format the posted PrizePicks fantasy score line for display."""
+    line = lookup_prizepicks_fantasy_line(player_name)
+    if line is None:
+        return "—"
+
+    if line == int(line):
+        return str(int(line))
+
+    return f"{line:.1f}"
 
 
 def rolling_pp_fantasy_over_rates(player_name, line, version="v2"):

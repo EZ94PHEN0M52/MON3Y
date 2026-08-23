@@ -1,7 +1,8 @@
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 from pathlib import Path
 import os
 import unicodedata
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -50,6 +51,43 @@ ODDS_API_KEY = os.getenv(
 )
 
 
+NAME_SUFFIXES = frozenset({
+    "jr",
+    "sr",
+    "ii",
+    "iii",
+    "iv",
+})
+
+
+MLB_SCHEDULE_TZ = ZoneInfo("America/New_York")
+
+
+def mlb_schedule_date(when: datetime | None = None) -> str:
+    """MLB slate calendar date in US Eastern (matches prop commence → game_date)."""
+    if when is None:
+        when = datetime.now(timezone.utc)
+    elif when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+
+    return when.astimezone(MLB_SCHEDULE_TZ).strftime("%Y-%m-%d")
+
+
+def game_date_from_commence(commence_time) -> str | None:
+    """Map Odds API commence_time to the MLB Eastern schedule date."""
+    if commence_time is None or pd.isna(commence_time):
+        return None
+
+    try:
+        return (
+            pd.to_datetime(commence_time, utc=True)
+            .tz_convert(MLB_SCHEDULE_TZ)
+            .strftime("%Y-%m-%d")
+        )
+    except (TypeError, ValueError):
+        return None
+
+
 def normalize_player_key(name) -> str:
     """Lowercase player name with accents stripped for cross-source matching."""
     text = str(name).strip().lower()
@@ -64,6 +102,14 @@ def normalize_player_key(name) -> str:
     return " ".join(text.split())
 
 
+def strip_name_suffix(key: str) -> str:
+    """Drop trailing generational suffixes (Jr, Sr, II, etc.) from a normalized key."""
+    parts = key.split()
+    while parts and parts[-1] in NAME_SUFFIXES:
+        parts.pop()
+    return " ".join(parts)
+
+
 PITCHER_SP_PROP_MARKETS = frozenset({
     "pitcher_strikeouts",
     "pitcher_walks",
@@ -74,6 +120,55 @@ PITCHER_SP_PROP_MARKETS = frozenset({
 DEFAULT_SP_LAG_THRESHOLD = 2
 
 DAILY_PROBABLES_PATH = PROCESSED_DIR / "daily_probables.parquet"
+CURRENT_PROPS_PATH = PROCESSED_DIR / "current_props.parquet"
+
+
+def slate_dates_from_props(props: pd.DataFrame) -> set[str]:
+    """Eastern schedule dates present in a props dataframe."""
+    if props is None or props.empty or "commence_time" not in props.columns:
+        return set()
+
+    dates = props["commence_time"].map(game_date_from_commence)
+    return {str(value) for value in dates if value}
+
+
+def slate_games_from_props(props: pd.DataFrame) -> pd.DataFrame:
+    """Unique games in props with Eastern schedule date and team names."""
+    columns = ["game_date", "home_team", "away_team", "game"]
+    if props is None or props.empty:
+        return pd.DataFrame(columns=columns)
+
+    required = {"commence_time", "home_team", "away_team"}
+    if not required.issubset(props.columns):
+        return pd.DataFrame(columns=columns)
+
+    working = props.dropna(
+        subset=["home_team", "away_team", "commence_time"],
+        how="any",
+    ).copy()
+    if working.empty:
+        return pd.DataFrame(columns=columns)
+
+    working["game_date"] = working["commence_time"].map(
+        game_date_from_commence
+    )
+    working = working[working["game_date"].notna()].copy()
+    if working.empty:
+        return pd.DataFrame(columns=columns)
+
+    if "game" not in working.columns:
+        working["game"] = (
+            working["away_team"].astype(str)
+            + " @ "
+            + working["home_team"].astype(str)
+        )
+
+    return (
+        working.drop_duplicates(
+            subset=["game_date", "home_team", "away_team"],
+        )[columns]
+        .reset_index(drop=True)
+    )
 
 
 def _props_game_key(row) -> tuple:
@@ -97,6 +192,15 @@ def _game_label(home_team, away_team) -> str:
     if pd.notna(home_team) and pd.notna(away_team):
         return f"{away_team} @ {home_team}"
     return "unknown game"
+
+
+def _is_known_game_key(key) -> bool:
+    """True when props row maps to an identifiable game."""
+    return (
+        isinstance(key, tuple)
+        and len(key) > 0
+        and key[0] != "unknown"
+    )
 
 
 def analyze_sp_prop_coverage(
@@ -144,7 +248,9 @@ def analyze_sp_prop_coverage(
 
     games = games.copy()
     games["_game_key"] = games.apply(_props_game_key, axis=1)
-    games = games[games["_game_key"].ne(("unknown",))]
+    games = games[
+        games["_game_key"].map(_is_known_game_key)
+    ]
 
     game_count = games["_game_key"].nunique()
     if game_count == 0:
@@ -195,7 +301,9 @@ def analyze_sp_prop_coverage(
 
     for _, game in game_meta.iterrows():
         game_key = game["_game_key"]
-        game_sp = sp_props[sp_props["_game_key"].eq(game_key)]
+        game_sp = sp_props[
+            sp_props["_game_key"] == game_key
+        ]
         posted_keys = set(game_sp["_player_key"].dropna().unique())
         posted_count = len(posted_keys)
 
@@ -282,7 +390,7 @@ def warn_sp_prop_coverage(
     """
     Print non-fatal warnings when SP props look incomplete.
 
-    Safe to call after props fetch and before predict; never aborts.
+    Advisory only — never blocks predict or Streamlit.
     """
     result = analyze_sp_prop_coverage(
         props,

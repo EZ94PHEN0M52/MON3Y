@@ -16,6 +16,7 @@ from utils import (
     PROCESSED_DIR,
     american_to_implied_probability,
     devig_two_way,
+    game_date_from_commence,
     historical_game_lines_path,
 )
 
@@ -30,13 +31,7 @@ GAME_LINE_FEATURES = [
 def _event_game_date(
     commence_time,
 ) -> str:
-    return (
-        pd.to_datetime(
-            commence_time,
-            utc=True,
-        )
-        .strftime("%Y-%m-%d")
-    )
+    return game_date_from_commence(commence_time) or ""
 
 
 def _normalize_team(name) -> str:

@@ -14,13 +14,14 @@ from odds_api import (
     OddsApiQuotaError,
     get_event_game_lines,
     get_event_prizepicks_fantasy,
+    get_event_prizepicks_props,
     get_event_props,
     get_events,
     normalize_event,
     redact_api_key,
 )
 from odds_snapshots import save_live_snapshot
-from fetch_probables import fetch_and_save_probables
+from fetch_probables import fetch_and_save_probables, warn_probables_slate_coverage
 from utils import (
     RAW_DIR,
     PROCESSED_DIR,
@@ -279,6 +280,21 @@ def fetch_current_props():
             )
 
             try:
+                pp_props_data = get_event_prizepicks_props(
+                    event["id"]
+                )
+                all_rows.extend(
+                    normalize_event(
+                        pp_props_data
+                    )
+                )
+            except Exception as pp_exc:
+                print(
+                    "WARNING: PrizePicks props fetch failed:",
+                    redact_api_key(pp_exc),
+                )
+
+            try:
                 pp_event_data = get_event_prizepicks_fantasy(
                     event["id"]
                 )
@@ -426,6 +442,11 @@ def fetch_current_props():
     warn_sp_prop_coverage(
         df,
         context="after props fetch",
+    )
+
+    warn_probables_slate_coverage(
+        df,
+        context="cached probables vs props slate",
     )
 
     return df

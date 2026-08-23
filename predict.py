@@ -32,6 +32,7 @@ from utils import (
     resolve_feature_path,
     warn_sp_prop_coverage,
 )
+from fetch_probables import warn_probables_slate_coverage
 
 
 def prepare_board(
@@ -142,6 +143,11 @@ def generate_predictions(
     props = attach_consensus_to_props(props)
 
     warn_sp_prop_coverage(
+        props,
+        context="before predict",
+    )
+
+    warn_probables_slate_coverage(
         props,
         context="before predict",
     )

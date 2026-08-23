@@ -17,11 +17,16 @@ import pandas as pd
 import requests
 
 from utils import (
+    CURRENT_PROPS_PATH,
     MLB_TO_ODDS_TEAM,
     PROCESSED_DIR,
     canonical_odds_team_key,
     coerce_mlb_id,
+    game_date_from_commence,
+    mlb_schedule_date,
     require_live_fetch,
+    slate_dates_from_props,
+    slate_games_from_props,
 )
 
 
@@ -147,14 +152,17 @@ def fetch_probables(
     game_date: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    Fetch probable starters for *game_date* (YYYY-MM-DD, default today UTC).
+    Fetch probable starters for *game_date* (YYYY-MM-DD).
+
+    Default *game_date* is today's MLB schedule date in US Eastern, matching
+    how prop commence times map to slate dates (not UTC calendar date).
 
     Returns a dataframe with schema:
     game_date, home_team, away_team, home_sp_name, away_sp_name,
     home_sp_id, away_sp_id, fetched_at, source
     """
     if game_date is None:
-        game_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        game_date = mlb_schedule_date()
 
     fetched_at = (
         datetime.now(timezone.utc)
@@ -209,6 +217,15 @@ def save_probables(
     output_path=PROBABLES_PATH,
 ) -> pd.DataFrame:
     output_path = PROCESSED_DIR / output_path.name
+
+    if output_path.exists() and not df.empty:
+        existing = pd.read_parquet(output_path)
+        incoming_dates = set(df["game_date"].astype(str).unique())
+        keep = existing[
+            ~existing["game_date"].astype(str).isin(incoming_dates)
+        ]
+        df = pd.concat([keep, df], ignore_index=True)
+
     df.to_parquet(
         output_path,
         index=False,
@@ -219,32 +236,372 @@ def save_probables(
     return df
 
 
+def _probables_team_rows(
+    probables_df: pd.DataFrame,
+    home_team: str,
+    away_team: str,
+) -> pd.DataFrame:
+    home_key = canonical_odds_team_key(home_team)
+    away_key = canonical_odds_team_key(away_team)
+
+    return probables_df[
+        probables_df["home_team"].map(canonical_odds_team_key).eq(home_key)
+        & probables_df["away_team"].map(canonical_odds_team_key).eq(away_key)
+    ]
+
+
+def _schedule_date_candidates(game_date: str) -> list[str]:
+    candidates = [str(game_date)[:10]]
+    try:
+        anchor = pd.Timestamp(candidates[0])
+        for offset in (-1, 1):
+            day = (anchor + pd.Timedelta(days=offset)).strftime("%Y-%m-%d")
+            if day not in candidates:
+                candidates.append(day)
+    except (TypeError, ValueError):
+        pass
+    return candidates
+
+
+def _probables_row_for_game(
+    probables_df: pd.DataFrame,
+    game_date: str,
+    home_team: str,
+    away_team: str,
+):
+    """Best probables row for a game, trying Eastern date ±1 day."""
+    if probables_df is None or probables_df.empty:
+        return None
+
+    for candidate_date in _schedule_date_candidates(game_date):
+        dated = probables_df[
+            probables_df["game_date"].astype(str).eq(candidate_date)
+        ]
+        team_rows = _probables_team_rows(
+            dated,
+            home_team,
+            away_team,
+        )
+        if not team_rows.empty:
+            return team_rows.iloc[0]
+
+    team_rows = _probables_team_rows(
+        probables_df,
+        home_team,
+        away_team,
+    )
+    if len(team_rows) == 1:
+        return team_rows.iloc[0]
+
+    return None
+
+
+def _probables_dates(probables_df: pd.DataFrame) -> set[str]:
+    if probables_df is None or probables_df.empty:
+        return set()
+    return {
+        str(value)
+        for value in probables_df["game_date"].astype(str).unique()
+    }
+
+
+def missing_probables_dates_for_slate(
+    props: pd.DataFrame,
+    probables_df: pd.DataFrame,
+) -> set[str]:
+    """Schedule dates in props that have no same-day probables rows."""
+    slate_dates = slate_dates_from_props(props)
+    if not slate_dates:
+        return set()
+
+    stored_dates = _probables_dates(probables_df)
+    return {date for date in slate_dates if date not in stored_dates}
+
+
+def analyze_probables_slate_coverage(
+    props: pd.DataFrame,
+    probables_df: pd.DataFrame | None = None,
+) -> dict:
+    """
+    Check that probables cover today's props slate for Batter Score SP lookup.
+
+    Returns a summary dict; does not print or abort.
+    """
+    empty = {
+        "ok": True,
+        "game_count": 0,
+        "games_with_sp": 0,
+        "games_missing_sp": [],
+        "warnings": [],
+        "slate_dates": [],
+        "probables_dates": [],
+        "missing_probables_dates": [],
+    }
+
+    slate = slate_games_from_props(props)
+    if slate.empty:
+        return empty
+
+    if probables_df is None:
+        if PROBABLES_PATH.exists():
+            try:
+                probables_df = pd.read_parquet(PROBABLES_PATH)
+            except Exception:
+                probables_df = pd.DataFrame()
+        else:
+            probables_df = pd.DataFrame()
+
+    slate_dates = sorted(slate_dates_from_props(props))
+    prob_dates = sorted(_probables_dates(probables_df))
+    missing_dates = sorted(
+        missing_probables_dates_for_slate(props, probables_df)
+    )
+
+    games_missing_sp = []
+    games_with_sp = 0
+    date_skew_games = []
+
+    for _, game in slate.iterrows():
+        game_date = str(game["game_date"])
+        home_team = game["home_team"]
+        away_team = game["away_team"]
+        label = game.get("game") or f"{away_team} @ {home_team}"
+
+        row = _probables_row_for_game(
+            probables_df,
+            game_date,
+            home_team,
+            away_team,
+        )
+
+        missing_parts = []
+        if row is None:
+            missing_parts.append("no probables row for game")
+        else:
+            if not isinstance(row.get("home_sp_name"), str) or not row["home_sp_name"].strip():
+                missing_parts.append("home SP TBD")
+            if not isinstance(row.get("away_sp_name"), str) or not row["away_sp_name"].strip():
+                missing_parts.append("away SP TBD")
+            stored_date = str(row.get("game_date", ""))[:10]
+            if stored_date and stored_date != game_date:
+                date_skew_games.append(
+                    f"{label} (slate {game_date}, probables {stored_date})"
+                )
+
+        if missing_parts:
+            games_missing_sp.append({
+                "game": label,
+                "game_date": game_date,
+                "missing": missing_parts,
+            })
+        else:
+            games_with_sp += 1
+
+    warnings = []
+    if missing_dates:
+        warnings.append(
+            "Probables missing entire slate date(s): "
+            + ", ".join(missing_dates)
+            + ". Batter Score SP lookup may fall back to adjacent dates."
+        )
+
+    if date_skew_games:
+        warnings.append(
+            "Probables matched via adjacent schedule date for: "
+            + "; ".join(date_skew_games)
+            + ". Re-fetch with `python fetch_data.py --probables` to store "
+            "the correct Eastern slate date."
+        )
+
+    if slate_dates and prob_dates and not set(slate_dates) & set(prob_dates):
+        warnings.append(
+            "No overlap between props slate dates ("
+            + ", ".join(slate_dates)
+            + ") and probables file dates ("
+            + ", ".join(prob_dates)
+            + "). Check timezone / re-fetch probables."
+        )
+
+    if games_missing_sp:
+        detail_lines = []
+        for item in games_missing_sp:
+            detail_lines.append(
+                f"  - {item['game']} ({item['game_date']}): "
+                + "; ".join(item["missing"])
+            )
+        warnings.append(
+            "Games missing probables / SP names for Batter Score:\n"
+            + "\n".join(detail_lines)
+        )
+
+    game_count = len(slate)
+    ok = bool(games_with_sp == game_count)
+
+    return {
+        "ok": ok,
+        "game_count": game_count,
+        "games_with_sp": games_with_sp,
+        "games_missing_sp": games_missing_sp,
+        "warnings": warnings,
+        "slate_dates": slate_dates,
+        "probables_dates": prob_dates,
+        "missing_probables_dates": missing_dates,
+    }
+
+
+def warn_probables_slate_coverage(
+    props: pd.DataFrame,
+    probables_df: pd.DataFrame | None = None,
+    *,
+    context: str = "",
+) -> dict:
+    """
+    Print non-fatal warnings when probables look misaligned with the slate.
+
+    Advisory only — never blocks predict or Streamlit; the board still loads
+    with Partial · SP TBD when SP lookup fails.
+    """
+    result = analyze_probables_slate_coverage(
+        props,
+        probables_df=probables_df,
+    )
+
+    if result["game_count"] == 0:
+        return result
+
+    prefix = "WARNING: Probables / Batter Score SP coverage"
+    if context:
+        prefix = f"{prefix} ({context})"
+
+    print()
+    print("=" * 60)
+    print(prefix)
+    print("=" * 60)
+    print(
+        f"Slate games: {result['game_count']} | "
+        f"With both SPs: {result['games_with_sp']} | "
+        f"Slate dates: {', '.join(result['slate_dates']) or '—'} | "
+        f"Probables dates: {', '.join(result['probables_dates']) or '—'}"
+    )
+
+    if result["ok"]:
+        print("OK — probables align with today's props slate.")
+    else:
+        for message in result["warnings"]:
+            print(message)
+        print(
+            "Fix: python fetch_data.py --probables "
+            "(auto-fetches missing Eastern slate dates when props cache exists)."
+        )
+
+    print()
+    return result
+
+
+def ensure_probables_for_props_slate(
+    props: pd.DataFrame | None = None,
+    *,
+    primary_date: str | None = None,
+) -> pd.DataFrame:
+    """
+    Fetch and merge probables for the Eastern schedule date(s) on today's slate.
+
+    Always refreshes *primary_date* (default: Eastern today). Also fetches any
+    props slate dates missing from daily_probables.parquet.
+    """
+    if props is None and CURRENT_PROPS_PATH.exists():
+        try:
+            props = pd.read_parquet(CURRENT_PROPS_PATH)
+        except Exception:
+            props = None
+
+    if primary_date is None:
+        primary_date = mlb_schedule_date()
+
+    dates_to_fetch = {primary_date}
+    if props is not None and not props.empty:
+        dates_to_fetch.update(slate_dates_from_props(props))
+
+    combined = (
+        pd.read_parquet(PROBABLES_PATH)
+        if PROBABLES_PATH.exists()
+        else pd.DataFrame()
+    )
+    dates_to_fetch.update(
+        missing_probables_dates_for_slate(props, combined)
+        if props is not None and not props.empty
+        else set()
+    )
+
+    fetched_frames = []
+    for schedule_date in sorted(dates_to_fetch):
+        print(f">>> Fetching probables for {schedule_date} (US Eastern slate)...")
+        fetched_frames.append(
+            fetch_probables(game_date=schedule_date)
+        )
+
+    if not fetched_frames:
+        return combined
+
+    incoming = pd.concat(
+        fetched_frames,
+        ignore_index=True,
+    )
+    return save_probables(incoming)
+
+
 def fetch_and_save_probables(
     game_date: Optional[str] = None,
+    *,
+    props: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     print()
     print("=" * 60)
     print("DOWNLOADING MLB PROBABLE STARTING PITCHERS")
     print("=" * 60)
 
-    df = fetch_probables(game_date=game_date)
+    if game_date is None:
+        print(f"Primary schedule date (US Eastern): {mlb_schedule_date()}")
+    else:
+        print(f"Primary schedule date: {game_date}")
 
-    if len(df):
-        known_home = df["home_sp_name"].notna().sum()
-        known_away = df["away_sp_name"].notna().sum()
+    combined = ensure_probables_for_props_slate(
+        props=props,
+        primary_date=game_date,
+    )
+
+    if len(combined):
+        latest = combined[
+            combined["game_date"].astype(str).eq(
+                str(game_date or mlb_schedule_date())
+            )
+        ]
+        if latest.empty:
+            latest = combined
+        known_home = latest["home_sp_name"].notna().sum()
+        known_away = latest["away_sp_name"].notna().sum()
         print(
-            f"Collected {len(df):,} games "
-            f"({known_home} home SP, {known_away} away SP named)."
+            f"Probables cache: {len(combined):,} rows across "
+            f"{combined['game_date'].astype(str).nunique()} date(s); "
+            f"primary day has {known_home} home / {known_away} away SP named."
         )
-        if len(df) <= 5:
-            print(df.to_string(index=False))
-        else:
-            print(df.head(5).to_string(index=False))
-            print("...")
     else:
         print("No probables collected.")
 
-    return save_probables(df)
+    if props is None and CURRENT_PROPS_PATH.exists():
+        try:
+            props = pd.read_parquet(CURRENT_PROPS_PATH)
+        except Exception:
+            props = None
+
+    if props is not None and not props.empty:
+        warn_probables_slate_coverage(
+            props,
+            combined,
+            context="after probables fetch",
+        )
+
+    return combined
 
 
 def lookup_opposing_sp(
@@ -266,16 +623,15 @@ def lookup_opposing_sp(
     away_key = canonical_odds_team_key(away_team)
     batter_key = canonical_odds_team_key(batter_team)
 
-    matches = probables_df[
-        probables_df["game_date"].astype(str).eq(str(game_date)[:10])
-        & probables_df["home_team"].map(canonical_odds_team_key).eq(home_key)
-        & probables_df["away_team"].map(canonical_odds_team_key).eq(away_key)
-    ]
+    row = _probables_row_for_game(
+        probables_df,
+        game_date,
+        home_team,
+        away_team,
+    )
 
-    if matches.empty:
+    if row is None:
         return None, None
-
-    row = matches.iloc[0]
 
     if batter_key == canonical_odds_team_key(row["home_team"]):
         return row.get("away_sp_name"), coerce_mlb_id(
@@ -296,7 +652,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--date",
-        help="Game date YYYY-MM-DD (default: today UTC)",
+        help="Game date YYYY-MM-DD (default: US Eastern schedule date)",
     )
     args = parser.parse_args()
 

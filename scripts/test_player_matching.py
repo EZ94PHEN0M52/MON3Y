@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from prop_scoring import fuzzy_player_match  # noqa: E402
-from utils import normalize_player_key  # noqa: E402
+from utils import normalize_player_key, strip_name_suffix  # noqa: E402
 
 
 def test_normalize_player_key_strips_initials_periods() -> None:
@@ -24,3 +24,19 @@ def test_normalize_player_key_strips_initials_periods() -> None:
 def test_fuzzy_player_match_initial_period_mismatch() -> None:
     candidates = pd.Series(["J.T. Ginn", "Emerson Hancock"])
     assert fuzzy_player_match("JT Ginn", candidates) == "J.T. Ginn"
+
+
+def test_strip_name_suffix() -> None:
+    assert strip_name_suffix("luis garcia jr") == "luis garcia"
+    assert strip_name_suffix("vladimir guerrero jr") == "vladimir guerrero"
+    assert strip_name_suffix("michael harris ii") == "michael harris"
+    assert strip_name_suffix("george springer") == "george springer"
+
+
+def test_fuzzy_player_match_generational_suffix() -> None:
+    candidates = pd.Series(["Luis García", "Jazz Chisholm", "Vladimir Guerrero"])
+    assert fuzzy_player_match("Luis Garcia Jr.", candidates) == "Luis García"
+    assert fuzzy_player_match("Jazz Chisholm Jr.", candidates) == "Jazz Chisholm"
+    assert fuzzy_player_match(
+        "Vladimir Guerrero Jr.", candidates
+    ) == "Vladimir Guerrero"

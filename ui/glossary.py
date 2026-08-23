@@ -287,6 +287,10 @@ GLOSSARY = {
         "production modestly; it does **not** mean Batter Score drives board "
         "edge or EV until explicitly wired in."
     ),
+    "pp_fantasy_line": (
+        "PrizePicks posted Over fantasy score line for this hitter (from the "
+        "daily us_dfs fetch). Used as the threshold for the L5 / L10 % column."
+    ),
     "filter_batter_score": (
         "Show props where Batter Score is at least this value (0–100)."
     ),

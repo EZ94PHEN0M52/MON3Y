@@ -54,6 +54,7 @@ from utils import (
     BATTER_SCORE_VALIDATION_PATH,
     RAW_DIR,
     coerce_mlb_id,
+    game_date_from_commence,
 )
 
 
@@ -110,16 +111,7 @@ def _parse_game_teams(game: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _game_date_from_commence(commence_time) -> Optional[str]:
-    if commence_time is None or pd.isna(commence_time):
-        return None
-
-    try:
-        return (
-            pd.to_datetime(commence_time, utc=True)
-            .strftime("%Y-%m-%d")
-        )
-    except (TypeError, ValueError):
-        return None
+    return game_date_from_commence(commence_time)
 
 
 def _probables_cache_key():
@@ -787,6 +779,101 @@ def _row_game_context(row) -> Optional[dict]:
         home_team=row.get("home_team"),
         away_team=row.get("away_team"),
     )
+
+
+def analyze_batter_score_sp_coverage(
+    df: pd.DataFrame,
+) -> dict:
+    """Summarize how many batter-score rows resolved an opposing SP."""
+    from ui.player_stats import BATTER_MARKETS
+
+    empty = {
+        "ok": True,
+        "player_games": 0,
+        "with_sp": 0,
+        "sp_tbd": 0,
+        "warnings": [],
+    }
+
+    if df is None or df.empty or "batter_score_label" not in df.columns:
+        return empty
+
+    batters = df[df["market"].isin(BATTER_MARKETS)].copy()
+    if batters.empty:
+        return empty
+
+    if "game" in batters.columns:
+        keys = batters.dropna(subset=["player", "game"]).drop_duplicates(
+            subset=["player", "game"]
+        )
+    else:
+        keys = batters.dropna(subset=["player"]).drop_duplicates(
+            subset=["player"]
+        )
+
+    labels = keys["batter_score_label"].fillna("").astype(str)
+    sp_tbd = labels.str.contains("SP TBD", case=False, na=False).sum()
+    player_games = len(keys)
+    with_sp = player_games - sp_tbd
+
+    warnings = []
+    if player_games and sp_tbd == player_games:
+        warnings.append(
+            "All batter-score player-games are Partial · SP TBD — probables "
+            "likely misaligned with the slate (timezone or stale fetch)."
+        )
+    elif player_games and sp_tbd / player_games >= 0.5:
+        warnings.append(
+            f"{sp_tbd}/{player_games} batter-score player-games are "
+            "Partial · SP TBD — check daily_probables.parquet."
+        )
+
+    return {
+        "ok": bool(sp_tbd == 0),
+        "player_games": int(player_games),
+        "with_sp": int(with_sp),
+        "sp_tbd": int(sp_tbd),
+        "warnings": warnings,
+    }
+
+
+def warn_batter_score_sp_coverage(
+    df: pd.DataFrame,
+    *,
+    context: str = "",
+) -> dict:
+    """
+    Print non-fatal warnings when Batter Score could not resolve SPs.
+
+    Advisory only — enrichment still returns Partial · SP TBD rows.
+    """
+    result = analyze_batter_score_sp_coverage(df)
+
+    if result["player_games"] == 0:
+        return result
+
+    prefix = "WARNING: Batter Score SP resolution"
+    if context:
+        prefix = f"{prefix} ({context})"
+
+    if result["warnings"]:
+        print()
+        print("=" * 60)
+        print(prefix)
+        print("=" * 60)
+        print(
+            f"Player-games scored: {result['player_games']} | "
+            f"With opposing SP: {result['with_sp']} | "
+            f"SP TBD: {result['sp_tbd']}"
+        )
+        for message in result["warnings"]:
+            print(message)
+        print(
+            "Fix: python fetch_data.py --probables, then restart Streamlit."
+        )
+        print()
+
+    return result
 
 
 def enrich_with_batter_score(
