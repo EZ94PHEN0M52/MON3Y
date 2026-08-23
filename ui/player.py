@@ -17,10 +17,13 @@ from ui.formatting import (
 from ui.glossary import EDGE_CALLOUT, GLOSSARY
 from ui.pick_builder import render_player_market_add_controls
 from ui.player_stats import (
+    count_games_vs_opponent,
     get_features_max_game_date,
     get_stat_history,
     infer_player_kind,
     markets_for_kind,
+    opponent_display_name,
+    slate_opponent_abbr,
     window_average,
     MARKET_STAT_MAP,
 )
@@ -150,8 +153,23 @@ def _market_table_column_config():
     }
 
 
+def _parse_slate_teams(player_df):
+    if "home_team" in player_df.columns and "away_team" in player_df.columns:
+        home = player_df["home_team"].iloc[0]
+        away = player_df["away_team"].iloc[0]
+        if pd.notna(home) and pd.notna(away):
+            return str(away), str(home)
+
+    game = player_df["game"].iloc[0] if "game" in player_df.columns else ""
+    if isinstance(game, str) and " @ " in game:
+        away, home = game.split(" @ ", 1)
+        return away.strip(), home.strip()
+
+    return None, None
+
+
 def _render_stat_history_section(player_name, player_df, version):
-    """Dropdown stat history with L5/L10 window toggle."""
+    """Dropdown stat history with L5/L10 window toggle and optional H2H filter."""
     player_kind = infer_player_kind(player_df["market"].unique())
     available_markets = markets_for_kind(player_kind)
 
@@ -164,13 +182,30 @@ def _render_stat_history_section(player_name, player_df, version):
     if max_date:
         st.caption(f"Game logs through {max_date}")
 
-    col_market, col_window, col_help = st.columns([3, 2, 1])
+    away_team, home_team = _parse_slate_teams(player_df)
+    slate_opponent = slate_opponent_abbr(
+        player_name,
+        home_team,
+        away_team,
+        player_kind,
+        version=version,
+    )
+    opponent_label = opponent_display_name(slate_opponent)
+
+    col_market, col_scope, col_window, col_help = st.columns([3, 2, 2, 1])
     with col_market:
         selected_market = st.selectbox(
             "Stat market",
             available_markets,
             format_func=market_label,
             key="player_stat_history_market",
+        )
+    with col_scope:
+        scope = st.segmented_control(
+            "Opponent filter",
+            options=["All", "H2H"],
+            default="All",
+            key="player_stat_history_scope",
         )
     with col_window:
         window = st.segmented_control(
@@ -183,15 +218,32 @@ def _render_stat_history_section(player_name, player_df, version):
         with st.popover("?"):
             st.markdown(GLOSSARY["stat_history"])
 
+    use_h2h = scope == "H2H"
+    opponent_abbr = slate_opponent if use_h2h else None
+
+    if use_h2h and opponent_abbr is None:
+        st.caption(
+            "H2H filter unavailable — could not match today's opponent "
+            "from slate teams and feature history."
+        )
+        use_h2h = False
+        opponent_abbr = None
+
     game_log = get_stat_history(
         player_name,
         selected_market,
         version=version,
         n=10,
+        opponent_abbr=opponent_abbr,
     )
 
     if game_log is None or game_log.empty:
-        st.caption("No game history available for this stat.")
+        if use_h2h:
+            st.caption(
+                f"No game history vs **{opponent_label}** for this stat."
+            )
+        else:
+            st.caption("No game history available for this stat.")
         return
 
     _, stat_col = MARKET_STAT_MAP[selected_market]
@@ -199,6 +251,17 @@ def _render_stat_history_section(player_name, player_df, version):
 
     l5_avg = window_average(game_log, stat_col, 5)
     l10_avg = window_average(game_log, stat_col, 10)
+
+    h2h_total = (
+        count_games_vs_opponent(
+            player_name,
+            selected_market,
+            slate_opponent,
+            version=version,
+        )
+        if use_h2h and slate_opponent
+        else None
+    )
 
     m1, m2, m3 = st.columns(3)
     with m1:
@@ -213,7 +276,17 @@ def _render_stat_history_section(player_name, player_df, version):
             f"{highlighted:.2f}" if not pd.isna(highlighted) else "—",
         )
 
-    st.caption(f"Last {window} games — {market_label(selected_market)}")
+    if use_h2h:
+        shown = len(display_log)
+        st.caption(
+            f"Last {shown} of {h2h_total} career games in logs vs "
+            f"**{opponent_label}** — {market_label(selected_market)}"
+        )
+    else:
+        st.caption(
+            f"Last {window} games — {market_label(selected_market)}"
+        )
+
     st.altair_chart(_last_games_bar_chart(display_log))
 
 

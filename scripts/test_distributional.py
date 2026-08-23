@@ -33,15 +33,17 @@ def test_pitcher_walks_in_distributional_markets() -> None:
     assert MARKET_STAT_MAP["pitcher_walks"] == "walks"
 
 
-def test_dual_head_markets_are_pitcher_k_and_walks() -> None:
+def test_dual_head_markets_include_pitcher_outs() -> None:
     assert DUAL_HEAD_MARKETS == frozenset({
         "pitcher_strikeouts",
         "pitcher_walks",
+        "pitcher_outs",
     })
     assert market_supports_dual_head("pitcher_strikeouts")
     assert market_supports_dual_head("pitcher_walks")
+    assert market_supports_dual_head("pitcher_outs")
     assert not market_supports_dual_head("batter_hits")
-    assert market_supports_distributional("pitcher_walks")
+    assert market_supports_distributional("pitcher_outs")
 
 
 def test_distributional_model_path_convention() -> None:
@@ -100,7 +102,7 @@ def test_fit_and_score_returns_predicted_count() -> None:
 
 def main() -> int:
     test_pitcher_walks_in_distributional_markets()
-    test_dual_head_markets_are_pitcher_k_and_walks()
+    test_dual_head_markets_include_pitcher_outs()
     test_distributional_model_path_convention()
     test_fit_and_score_returns_predicted_count()
     print("Distributional Phase 1 tests passed")

@@ -5,7 +5,7 @@
 - **GitHub:** [EZ94PHEN0M52/MON3Y](https://github.com/EZ94PHEN0M52/MON3Y) — tags **`v1`**, **`v2`**, **`v3`** mark frozen baselines; active development is on **`main`**
 - **Frozen local copies:** [`mlb-prop-model-v1/`](../mlb-prop-model-v1), [`mlb-prop-model-v2/`](../mlb-prop-model-v2), [`mlb-prop-model-v3/`](../mlb-prop-model-v3/)
 
-**Table of contents:** [Quick start](#quick-start-for-beginners) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
+**Table of contents:** [Quick start](#quick-start-for-beginners) · [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Pitcher outs learning](#pitcher-outs-learning-loop-track-1) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
 
 > **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder). For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
 
@@ -107,10 +107,12 @@ DISABLE_LIVE_FETCH=1 python predict.py --start 2026-03-25 --end 2026-08-16 --ver
 
 ```bash
 cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
-./run_daily.sh                  # fetch → features → predict_v2
-./run_daily.sh --streamlit      # same, then http://localhost:8501
-./run_daily.sh --skip-props     # reuse cached current_props.parquet
+./run_daily.sh --streamlit          # evening (~8pm PT): fresh props + board for tomorrow
+./run_daily.sh --skip-props --streamlit   # morning: refresh rolling stats, keep pre-game lines
+./run_daily.sh --skip-props         # reuse cached current_props.parquet only
 ```
+
+**Recommended rhythm:** evening fetch when props post, morning `--skip-props` for fresh Statcast — see [Step A → Recommended daily rhythm](#step-a--v2--main-daily-pipeline) and [Shell scripts walkthrough](#shell-scripts--quick-walkthrough).
 
 **Streamlit:** Sidebar **Model version** defaults to **`v2`**. Board, Pick Builder, Batter Score, and market filters use `predictions_v2.csv`. **Version compare** adds V3 (manual CSV copy) and Main (same file as V2 today).
 
@@ -243,6 +245,26 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 4. `fetch_probables.py` — probable starting pitchers → `data/processed/daily_probables.parquet` (feeds Batter Score on the board).
 5. `predict.py --version v2` — scores every prop → `data/predictions/predictions_v2.csv` and `predictions_v2_best.csv` (~30 s–2 min).
 
+**Recommended daily rhythm (evening + morning)** — books usually post **tomorrow’s slate** around **~8pm PT / 11pm ET**, after that day’s games finish. The pipeline is built for a **two-pass** schedule:
+
+| When | Command | Why |
+|------|---------|-----|
+| **Evening** (~8pm PT, props live) | `./run_daily.sh --streamlit` | Fresh props, game lines, and probables for **tomorrow’s slate**; scores the board. Do **not** use `--skip-props` or `--skip-probables` — you want new lines and SP names. |
+| **Next morning** (Statcast posted) | `./run_daily.sh --skip-props --streamlit` | Refreshes rolling stats through **calendar yesterday** without overwriting last night’s pre-game lines. |
+
+**What lines up correctly on the evening run:**
+
+- **Props & game lines** — Odds API returns upcoming events (tomorrow once posted).
+- **SP props** (`pitcher_strikeouts`, walks, hits allowed, outs) — scored when books post them.
+- **Probables** — fetched for every **Eastern slate date** in `current_props.parquet` (feeds Batter Score opposing-SP lookup).
+- **Over % / Edge / EV** — computed at predict time from each player’s latest feature row.
+
+**One timing caveat:** `run_daily.sh` uses `YESTERDAY=$(date -v-1d)` for features. On an **evening** run, that is still **calendar yesterday**, so today’s just-finished box scores are **not** in rolling stats yet — the board is correct for tomorrow’s lines, but L5/L10 and model form are **one slate behind** until the morning pass. Check the player page caption **Game logs through YYYY-MM-DD** to confirm feature freshness.
+
+**Terminal checks after the evening run:** look for `OK — SP prop coverage looks complete` and probables counts (`primary day has N home / M away SP named`). If Batter Score shows **Partial · SP TBD** everywhere, re-run `python fetch_data.py --probables` once MLB has named starters.
+
+See [Shell scripts — quick walkthrough](#shell-scripts--quick-walkthrough) for flag details on each script.
+
 **Expected files after success:**
 
 ```text
@@ -353,6 +375,125 @@ Stop the server with **Ctrl+C** in the terminal.
 The compare view uses [`@st.cache_data`](ui/version_compare.py) keyed on prediction CSV **modification times** — it reloads when you regenerate predictions, not on every widget click.
 
 For implementation details (merge keys, dedupe, slot config), see [Version compare (reference)](#version-compare-v1--v2--v3--main) below.
+
+---
+
+## Shell scripts — quick walkthrough
+
+Three bash entry points wrap the Python pipeline. Run them from the project root (`./script.sh`, not bare `script.sh` on zsh). Each auto-activates `.venv`.
+
+**Typical season schedule:**
+
+```text
+Evening (props post)      →  ./run_daily.sh --streamlit
+Next morning (fresh form)   →  ./run_daily.sh --skip-props --streamlit
+Weekly / after backfill   →  ./run_evaluation.sh
+Optional (outs learning)  →  ./run_pitcher_outs_learning.sh
+```
+
+Full flag tables live in [Command reference](#command-reference). This section is the **order-of-operations cheat sheet**.
+
+---
+
+### 1. `./run_daily.sh` — run first, every game day
+
+**Purpose:** Refresh features (if needed), fetch today’s slate from sportsbooks, pull probables, score every prop, optionally open the board.
+
+**When:** **Evening** when tomorrow’s props are live (~8pm PT); **morning** to refresh Statcast/form (`--skip-props`).
+
+```bash
+./run_daily.sh [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--streamlit] [--port N]
+```
+
+| Step | What runs | Skipped by |
+|------|-----------|------------|
+| 1 | `ensure_features.py --fix` — season features through **yesterday** | Never |
+| 2 | `fetch_data.py --props` → `current_props.parquet` | `--skip-props` |
+| 3 | `fetch_data.py --game-lines` → `current_game_lines.parquet` | `--skip-game-lines` |
+| 4 | `fetch_data.py --probables` → `daily_probables.parquet` | `--skip-probables` |
+| 5 | `train.py` (2025 window) | Only `--train` |
+| 6 | `predict.py --version v2` → `predictions_v2.csv` | Never |
+| 7 | `streamlit run app.py` | Only with `--streamlit` |
+
+| Flag | What it does | When to use |
+|------|--------------|-------------|
+| *(none)* | Full online pipeline | Evening run when props just posted |
+| `--streamlit` | Opens board after predict | Normal daily UX |
+| `--skip-props` | Reuse cached props/lines from last fetch | **Morning** refresh; after games start (keeps pre-game lines) |
+| `--skip-probables` | Reuse cached SP list | Repeat run same slate; save MLB API calls |
+| `--skip-game-lines` | Reuse cached totals/spreads | Re-predict only |
+| `--train` | Retrain all V2 classifiers on 2025 window | First setup, schema bump, infrequent refresh — **not** daily |
+| `--port N` | Streamlit port (default 8501) | Port conflict |
+
+**Common combos:**
+
+```bash
+./run_daily.sh --streamlit                              # evening: full fetch + board
+./run_daily.sh --skip-props --streamlit                   # morning: fresh form, same lines
+./run_daily.sh --skip-props --skip-probables --streamlit  # minimal API; offline re-score
+```
+
+**Writes:** `data/processed/current_*.parquet`, `data/predictions/predictions_v2.csv`, optionally refreshes feature parquets.
+
+---
+
+### 2. `./run_evaluation.sh` — run separately (not daily)
+
+**Purpose:** Offline **Phase 6** evaluation on a **historical** window — backtest ROI, fit probability calibrators, fit distributional (Poisson) heads for K/walks/outs.
+
+**When:** After you have historical props + feature parquets for the window; typically **weekly or after backfill**, not before every board session.
+
+```bash
+./run_evaluation.sh [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--version v2] [--min-edge N] [--min-ev N]
+```
+
+| Step | What runs |
+|------|-----------|
+| 1 | `scripts/backtest.py` — simulated picks vs historical lines |
+| 2 | `scripts/fit_calibrators.py` — isotonic/Platt from backtest CSV |
+| 3 | `scripts/fit_distributional.py` — Poisson regressors → `models/v2/dist/*.pkl` |
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--start` / `--end` | `2025-04-01` → `2025-06-30` | Historical evaluation window |
+| `--version` | `v2` | Model directory |
+| `--min-edge` / `--min-ev` | Script defaults | Backtest filter thresholds |
+
+**Does not:** fetch live props, retrain main LightGBM classifiers, or regenerate today’s board.
+
+**After evaluation:** run `./run_daily.sh` (or `--streamlit`) so live predict picks up new calibrators and **Pred #** / **Dist Over %** models.
+
+---
+
+### 3. `./run_pitcher_outs_learning.sh` — optional Track 1 loop
+
+**Purpose:** Self-learning loop for **pitcher_outs only** — log predictions → join post-game outcomes → retrain outs classifier → re-predict.
+
+**When:** **Weekly** or when enough logged outcomes exist; not required for a normal board day.
+
+```bash
+./run_pitcher_outs_learning.sh [--fit-distributional] [--streamlit] [skip flags...]
+```
+
+| Step | What runs | Skipped by |
+|------|-----------|------------|
+| 1 | `./run_daily.sh` (logging during predict) | `--skip-daily` |
+| 2 | `scripts/log_outcomes.py` — join actual outs to log | `--skip-join` |
+| 3 | `scripts/retrain_market.py` — outs classifier only | `--skip-retrain` |
+| 3b | `scripts/fit_distributional.py --market pitcher_outs` | Only `--fit-distributional` |
+| 4 | `predict.py` — refresh board with new outs model | `--skip-repredict` |
+
+| Flag | Meaning |
+|------|---------|
+| `--fit-distributional` | Also train Poisson head → **Pred #** / **Dist Over %** for outs |
+| `--skip-daily` | Outcomes + retrain only (no fresh predict log) |
+| `--skip-join` / `--skip-retrain` / `--skip-repredict` | Run subset of steps |
+| `--join-start` / `--join-end` | Outcome join window (default season start → yesterday) |
+| `--train-start` / `--train-end` | Retrain feature window (default season start → yesterday) |
+| `--fetch-props` | Refresh props during step 1 (default skips props fetch) |
+| `--streamlit` | Open board when done |
+
+**Note:** Step 2 needs **played games** in the log — first run after an evening predict may show **0 outcomes joined** until the next day. See [Pitcher outs learning loop](#pitcher-outs-learning-loop-track-1).
 
 ---
 
@@ -573,9 +714,11 @@ Use skip flags for intraday re-predicts or when odds/probables were fetched earl
 
 Historical odds backfill (`fetch_historical_odds.py`) and evaluation ([`./run_evaluation.sh`](#evaluation-pipeline-phase-6)) are **outside** `run_daily.sh` — run them separately when needed.
 
-### Dual-head pitcher K / walks (brief)
+### Dual-head pitcher K / walks / outs (brief)
 
-Post-v3 upgrade for count markets **`pitcher_strikeouts`** and **`pitcher_walks`**: a lightweight **dual-head** — existing LightGBM **classifier** (beat the line?) plus a Poisson **regressor** (expected count μ). Classifier probability remains the source of truth for **edge** and **EV**; regressor outputs (`predicted_count`, `dist_over_probability`) appear on the board for context. Inference: [`predict.py`](predict.py) (`DUAL_HEAD_MARKETS` in [`distributional.py`](distributional.py)). Training: [`scripts/fit_distributional.py`](scripts/fit_distributional.py) → `models/v2/dist/{market}.pkl` (via [`./run_evaluation.sh`](#evaluation-pipeline-phase-6)). A 50/50 classifier+regressor probability blend is deferred — see [docs/ROADMAP.md](docs/ROADMAP.md).
+Post-v3 upgrade for count markets **`pitcher_strikeouts`**, **`pitcher_walks`**, and **`pitcher_outs`**: a lightweight **dual-head** — existing LightGBM **classifier** (beat the line?) plus a Poisson **regressor** (expected count μ). Classifier probability remains the source of truth for **edge** and **EV**; regressor outputs (`predicted_count`, `dist_over_probability`) appear on the board for context. Inference: [`predict.py`](predict.py) (`DUAL_HEAD_MARKETS` in [`distributional.py`](distributional.py)). Training: [`scripts/fit_distributional.py`](scripts/fit_distributional.py) → `models/v2/dist/{market}.pkl` (via [`./run_evaluation.sh`](#evaluation-pipeline-phase-6) or [`./run_pitcher_outs_learning.sh --fit-distributional`](#pitcher-outs-learning-loop-track-1)). A 50/50 classifier+regressor probability blend is deferred — see [docs/ROADMAP.md](docs/ROADMAP.md).
+
+**Track 1 self-learning** for outs only (log → join outcomes → retrain) is documented in [Pitcher outs learning loop](#pitcher-outs-learning-loop-track-1).
 
 ---
 
@@ -1506,7 +1649,7 @@ Side-by-side **Over %** / **Under %** for V1, V2, V3, and Main — see [Quick st
 
 ## Command reference
 
-Detailed flags, when to use them, and how each script fits the daily pipeline. See also [Daily workflow (V2)](#daily-workflow-v2) for the ordered step list.
+Detailed flags, when to use them, and how each script fits the daily pipeline. See also [Shell scripts — quick walkthrough](#shell-scripts--quick-walkthrough) for order-of-operations and [Daily workflow (V2)](#daily-workflow-v2) for the ordered step list.
 
 ### run_daily.sh — pipeline flags
 
@@ -1549,9 +1692,9 @@ Skip flags are **independent** — combine as needed (e.g. all three skips + `--
 
 | Command | Use case |
 |---------|----------|
-| `./run_daily.sh` | Standard daily refresh |
-| `./run_daily.sh --streamlit` | Daily refresh + open board |
-| `./run_daily.sh --skip-props --streamlit` | Re-score slate with cached props (e.g. Sunday morning after Saturday games, or after games started) |
+| `./run_daily.sh --streamlit` | **Evening** — props just posted (~8pm PT); full fetch + board for tomorrow |
+| `./run_daily.sh --skip-props --streamlit` | **Morning** — refresh Statcast/form; keep last night’s pre-game lines |
+| `./run_daily.sh` | Standard full refresh (any time) |
 | `./run_daily.sh --skip-props --skip-probables --streamlit` | Minimal API usage — only feature check may hit Statcast if stale |
 | `./run_daily.sh --train --streamlit` | Full retrain + predict + UI (infrequent) |
 | `./run_daily.sh --skip-props --skip-game-lines --skip-probables` | Offline predict only (requires valid cache + features) |
@@ -1810,6 +1953,26 @@ Reads `predictions.csv` (V1) or `predictions_v2.csv` (V2) from sidebar selection
 
 **Board columns (V2):** includes **PP fantasy** (PrizePicks fantasy score line from `prizepicks_fantasy_lines.parquet`) on the batter score board only — not mixed into main prop markets.
 
+### run_pitcher_outs_learning.sh — Track 1 self-learning loop
+
+Orchestrates the full **pitcher_outs** collect → join → retrain → re-predict cycle. See [Pitcher outs learning loop (Track 1)](#pitcher-outs-learning-loop-track-1) for context.
+
+```bash
+./run_pitcher_outs_learning.sh [--fit-distributional] [--streamlit] [--skip-daily|--skip-join|--skip-retrain|--skip-repredict]
+./run_pitcher_outs_learning.sh --help
+```
+
+| Flag | Meaning |
+|------|---------|
+| *(default)* | All four steps: daily predict (with logging) → join outcomes → retrain classifier → re-predict |
+| `--skip-props` (via daily) | Default — uses cached `current_props.parquet` |
+| `--fetch-props` | Refresh props before predict |
+| `--fit-distributional` | Also train Poisson regressor → **Pred #** / **Dist Over %** on board for outs |
+| `--skip-daily` / `--skip-join` / `--skip-retrain` / `--skip-repredict` | Run subset of steps |
+| `--join-start` / `--join-end` | Outcome join window (default season start → yesterday) |
+| `--train-start` / `--train-end` | Classifier retrain window (default season start → yesterday) |
+| `--streamlit` | Launch board after pipeline |
+
 ---
 
 ## V2 feature additions
@@ -1838,6 +2001,7 @@ Column lists: `BATTER_FEATURES_V2_EXTRA` and `PITCHER_FEATURES_V2_EXTRA` in `fea
 ```text
 mlb-prop-model/
 ├── run_daily.sh           # Daily pipeline: ensure_features → props → game lines → probables → predict [→ streamlit]
+├── run_pitcher_outs_learning.sh  # Track 1: log → join outcomes → retrain outs → re-predict
 ├── run_evaluation.sh      # Phase 6: backtest → calibrators → distributional (not daily)
 ├── docs/
 │   └── ROADMAP.md         # Dual-head pitcher K/walks + Batter Score validation (next)
@@ -1853,7 +2017,8 @@ mlb-prop-model/
 ├── odds_aggregation.py    # Devig, consensus line, best-price aggregation
 ├── training_odds.py       # Historical props → training rows (Phase 3)
 ├── calibration.py         # Isotonic/Platt calibration (Phase 6)
-├── distributional.py      # Poisson rate models (Phase 6)
+├── distributional.py      # Poisson rate models; DUAL_HEAD_MARKETS (K, walks, outs)
+├── learning_log.py        # Track 1 append-only prediction/outcome logs
 ├── clv.py                 # Closing line value for backtests (Phase 6)
 ├── prop_scoring.py        # Shared model scoring (predict + backtest)
 ├── game_lines.py          # Game totals/spreads consensus (Phase 5)
@@ -1865,6 +2030,9 @@ mlb-prop-model/
 ├── utils.py               # Paths, odds math, coerce_mlb_id, TEAM_ABBR_TO_ODDS
 ├── scripts/
 │   ├── ensure_features.py # --start --end [--version v1|v2] [--fix]
+│   ├── log_outcomes.py    # Join predictions_log → actual outs (Track 1)
+│   ├── retrain_market.py  # Single-market retrain (pitcher_outs)
+│   ├── test_learning_log.py
 │   ├── backtest.py        # Historical props vs model edges + outcomes + CLV
 │   ├── fit_calibrators.py # Fit per-market probability calibrators (Phase 6)
 │   ├── fit_distributional.py  # Train Poisson rate models (Phase 6)
@@ -1889,6 +2057,7 @@ mlb-prop-model/
 │   ├── raw/               # statcast_{start}_{end}.parquet, odds/historical/, odds/snapshots/
 │   ├── processed/         # Features, current_props.parquet, daily_probables.parquet
 │   ├── backtest/          # backtest_{start}_{end}.csv
+│   ├── learning/          # predictions_log.parquet, outcomes_log.parquet (Track 1)
 │   └── predictions/       # predictions.csv, predictions_v2.csv, predictions_v2_best.csv
 ├── ../mlb-prop-model-v1/  # Frozen V1 copy (do not edit)
 ├── ../mlb-prop-model-v2/  # Frozen V2 snapshot (tag v2)
@@ -1942,7 +2111,12 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | Unknown option in `run_daily.sh` | Use `--train`, `--skip-props`, `--skip-game-lines`, `--skip-probables`, `--streamlit`, or `--help` |
 | Streamlit crash: `ValueError: cannot convert float NaN to integer` during Batter Score | Probable has SP **name** but **NaN `sp_id`** (TBD). Fixed by [`coerce_mlb_id()`](#6-nan-sp_id--tbd-starter-ids-2026-08-19) in [`utils.py`](utils.py). Pull latest code, then **restart Streamlit** — score is enriched at UI load, not in `predictions_v2.csv` |
 | Batter Score shows **Form only** for everyone | Run probables fetch ([Daily workflow](#daily-workflow-v2) step 4, or `fetch_data.py --probables`); check `data/processed/daily_probables.parquet`; **restart Streamlit** after fetch — see [Batter Score → Where it runs](#batter-score) |
-| **All SP TBD** / every row **Partial · SP TBD** even when probables show names | (1) Fetch probables ([step 4](#daily-workflow-v2)), (2) fix **team abbr mapping** — feature parquets use abbrs (`SF`), probables use full names (`San Francisco Giants`); verify [`TEAM_ABBR_TO_ODDS`](#5-team-abbreviation-mapping-critical-fix) + `canonical_odds_team_key()` in [`fetch_probables.py`](fetch_probables.py), (3) restart Streamlit. Distinct from NaN `sp_id` — that case shows **Partial** with ERA when name is known |
+| **All SP TBD** / every row **Partial · SP TBD** even when probables show names | **Common fix (2026-08-22):** UTC vs Eastern date mismatch — re-run probables without `--skip-probables`. Also verify (1) `daily_probables.parquet` exists, (2) [`TEAM_ABBR_TO_ODDS`](#5-team-abbreviation-mapping-critical-fix) team mapping, (3) restart Streamlit. See [Changelog → Probables Eastern date](#2026-08-22--probables-eastern-date-sp-coverage--player-matching) |
+| **Luis Garcia Jr.** / suffix players missing from board | Fixed: Jr./Sr. stripped in [`utils.py`](utils.py). Re-run `predict.py`; player must exist in feature parquets |
+| **Brett Bateman** / recent call-ups missing | No Statcast history — run `ensure_features.py --fix` after games accumulate; batter score needs ≥10 games |
+| **Pitcher outs learning** — empty predictions log | Run `predict.py` first; logging is automatic for `pitcher_outs`. Check `data/learning/predictions_log.parquet` |
+| **Pitcher outs learning** — zero outcome joins | Log must cover completed dates; feature parquets need box scores. Adjust `--join-start` / `--join-end` on `log_outcomes.py` |
+| **Pred # / Dist Over %** blank for Pitcher Outs | `./run_pitcher_outs_learning.sh --fit-distributional` then re-predict. Edge still from classifier |
 | Batter Score **Partial** vs **Full** — scores look incomparable | **By design:** **Full** = all four components (season, form, matchup, pitcher). **Partial** / **Partial · SP TBD** / **Form only** omit gated components and **renormalize** weights — rank within the same label, not across labels. See [Component gating](#3-component-gating-and-weight-renormalization) |
 | Batter Score unchanged after probables update | Computed at **Streamlit load**, not written to CSV. Restart after `./run_daily.sh` or probables fetch ([Where it runs](#batter-score)) |
 | LightGBM libomp error | `brew install libomp` |
@@ -1958,6 +2132,127 @@ See also: [Operational note — suspended jobs](#operational-note--suspended-job
 
 ---
 
+## Pitcher outs learning loop (Track 1)
+
+Self-learning pipeline for **`pitcher_outs` only** — collect what the model predicted, join post-game actual outs, retrain the classifier (and optionally the Poisson regressor), then refresh the board CSV. Spec: [docs/ROADMAP.md](docs/ROADMAP.md#track-1--pitcher-outs-learning-loop-v1-shipped).
+
+### Why this exists
+
+The daily board uses a **frozen** LightGBM classifier (`models/v2/pitcher_outs.pkl`) trained on a fixed historical window. Track 1 adds a **feedback path** so you can:
+
+1. **Log** every outs prop the model scores (line, probability, edge, book)
+2. **Measure** how those predictions performed vs actual outs from Statcast/feature parquets
+3. **Retrain** only the outs classifier when you choose — without retraining all 13 markets
+4. **Optionally** fit a Poisson **regressor** so **Pred #** and **Dist Over %** populate on the board (same columns as K/walks)
+
+This is **not** fully automatic nightly retrain yet — you run the loop when you want to refresh the outs model (e.g. weekly, or after accumulating a few weeks of logged predictions).
+
+### Board / UI impact
+
+| Stage | Main board | Batter score board | Other markets |
+|-------|------------|-------------------|---------------|
+| **Logging only** (default after `predict.py`) | No visible change | No change | No change |
+| **After classifier retrain + re-predict** | **Pitcher Outs** rows: Over %, Edge, EV may change | No change | No change |
+| **After `--fit-distributional`** | **Pitcher Outs** rows: **Pred #** and **Dist Over %** fill in (existing columns) | No change | No change |
+
+**Unchanged by design:** Edge and EV still come from the **classifier**, not the Poisson head. No new columns are added to the board layout.
+
+### Data files (gitignored)
+
+| File | Written by | Contents |
+|------|------------|----------|
+| `data/learning/predictions_log.parquet` | `predict.py` (automatic) | Every `pitcher_outs` row scored, with model prob / edge / line / book / `game_date` |
+| `data/learning/outcomes_log.parquet` | `scripts/log_outcomes.py` | Joined actual `outs`, `over_hit`, `prediction_error` per logged prop |
+
+### Recommended: one executable script
+
+Yes — **`./run_pitcher_outs_learning.sh`** wraps all four steps and is the preferred entry point. Use individual commands when you need fine control (e.g. retrain without re-running the full daily pipeline).
+
+```bash
+# Full loop (default: skip props fetch, use cached lines)
+./run_pitcher_outs_learning.sh
+
+# Also train Poisson regressor → Pred # / Dist Over % on board for outs
+./run_pitcher_outs_learning.sh --fit-distributional
+
+# Open board when done
+./run_pitcher_outs_learning.sh --fit-distributional --streamlit
+```
+
+### Step-by-step (manual equivalent)
+
+#### Step 1 — Daily predict + auto-log
+
+```bash
+./run_daily.sh --skip-props
+```
+
+**What happens:**
+
+| Sub-step | Script | Purpose |
+|----------|--------|---------|
+| Features | `ensure_features.py --fix` | Refreshes Statcast/features through **yesterday** so rolling outs stats are current |
+| Props | *(skipped with `--skip-props`)* | Uses cached `current_props.parquet` — saves Odds API credits |
+| Game lines / probables | `fetch_data.py` | Still runs unless you also pass `--skip-game-lines` / `--skip-probables` |
+| Predict | `predict.py` | Scores all markets → `predictions_v2.csv` |
+| **Log** | `learning_log.py` | Appends **`pitcher_outs` rows only** to `data/learning/predictions_log.parquet` |
+
+**Why `--skip-props`:** After games start, a fresh props fetch can overwrite pre-game lines with live numbers. For learning, you usually want the same cached slate you already predicted against. Use `./run_daily.sh` without `--skip-props` when you intentionally want fresh lines.
+
+Logging is **non-blocking** — if the log write fails, predict still completes and the board is unaffected.
+
+#### Step 2 — Join actual outs (after games finish)
+
+```bash
+python scripts/log_outcomes.py \
+  --start 2026-04-01 \
+  --end $(date -v-1d +%Y-%m-%d)
+```
+
+**What happens:** Reads `predictions_log.parquet`, matches each `(game_date, player)` to **`outs`** in pitcher feature parquets (fuzzy name match), computes whether the prop hit (`actual > line`), and appends to `outcomes_log.parquet`.
+
+**Run when:** At least one **completed** game day exists in the log (typically morning after night games). Re-running is safe — duplicate keys are updated, not duplicated.
+
+**Dry run:** add `--dry-run` to print match count without writing.
+
+#### Step 3 — Retrain outs classifier (and optional Poisson head)
+
+```bash
+python scripts/retrain_market.py \
+  --market pitcher_outs \
+  --start 2026-03-25 \
+  --end 2026-08-21
+
+# Optional dual-head regressor:
+python scripts/retrain_market.py \
+  --market pitcher_outs \
+  --start 2026-03-25 \
+  --end 2026-08-21 \
+  --fit-distributional
+```
+
+**What happens:** Rebuilds training rows from pitcher feature parquets (same path as `train.py`, but **outs only**), fits a new `pitcher_outs.pkl`. With `--fit-distributional`, also writes `models/v2/dist/pitcher_outs.pkl`.
+
+**When to run:** After you have enough logged outcomes to justify a refresh, or on a schedule (weekly). The shell script defaults to **current season start → yesterday** (same feature window as `run_daily.sh` predict). Override with `--train-start` / `--train-end` if needed.
+
+**Board impact starts here** — but only after step 4.
+
+#### Step 4 — Re-predict
+
+```bash
+python predict.py
+```
+
+**What happens:** Loads the new `pitcher_outs.pkl` (and dist model if present), rewrites `predictions_v2.csv`. Restart Streamlit if it is already open (or use `--streamlit` on the learning script).
+
+Filter the main board to **Pitcher Outs** to compare Over % / Edge / Pred # before and after.
+
+### Script flags reference
+
+See [Command reference → run_pitcher_outs_learning.sh](#run_pitcher_outs_learningsh--track-1-self-learning-loop).
+
+---
+
 ## Updating this README
 
 Keep this file in sync when adding new CLI flags, paths, or workflow steps. Update the V1 README if frozen-folder paths change.
@@ -1965,6 +2260,45 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 ---
 
 ## Changelog
+
+### 2026-08-22 — Pitcher outs learning loop (Track 1) + dual-head outs
+
+**Context:** Post-v3 work needed a **single-market self-learning path** for Pitcher Outs without retraining all props or changing board layout. Users also wanted Poisson **Pred #** / **Dist Over %** on the board for outs (same as K/walks).
+
+**Added:**
+- [`learning_log.py`](learning_log.py) — append-only `data/learning/predictions_log.parquet` and `outcomes_log.parquet`
+- [`predict.py`](predict.py) — auto-logs `pitcher_outs` rows after enrich (non-blocking)
+- [`scripts/log_outcomes.py`](scripts/log_outcomes.py) — join logged preds to actual `outs` from feature parquets
+- [`scripts/retrain_market.py`](scripts/retrain_market.py) — retrain `pitcher_outs.pkl` only; optional `--fit-distributional`
+- [`run_pitcher_outs_learning.sh`](run_pitcher_outs_learning.sh) — one-shot wrapper for log → join → retrain → re-predict
+- [`distributional.py`](distributional.py) — `pitcher_outs` in `DISTRIBUTIONAL_MARKETS` and `DUAL_HEAD_MARKETS`
+- [`scripts/test_learning_log.py`](scripts/test_learning_log.py), updated [`scripts/test_distributional.py`](scripts/test_distributional.py)
+- README [Pitcher outs learning loop (Track 1)](#pitcher-outs-learning-loop-track-1); [docs/ROADMAP.md](docs/ROADMAP.md) Track 1 section
+
+**Board impact:** Logging none. Retrain + re-predict changes **Pitcher Outs** Over % / Edge / EV only. `--fit-distributional` fills existing **Pred #** and **Dist Over %** columns for outs rows; edge still classifier.
+
+---
+
+### 2026-08-22 — Probables Eastern date, SP coverage, player matching, PrizePicks
+
+**Context:** Mass **Partial · SP TBD** on the batter score board; Jr./Sr. suffix players not matching feature parquets; PrizePicks props and fantasy lines requested.
+
+**Fixes / changes:**
+- [`fetch_probables.py`](fetch_probables.py), [`utils.py`](utils.py), [`game_lines.py`](game_lines.py) — **US Eastern** schedule dates aligned with slate `game_date` (UTC mismatch caused all SP lookups to fail)
+- [`utils.py`](utils.py) `strip_name_suffix` — **Jr./Sr.** normalization for prop ↔ feature matching (e.g. Luis Garcia Jr.)
+- [`odds_api.py`](odds_api.py) / [`fetch_data.py`](fetch_data.py) — merge PrizePicks standard props; **PP fantasy** column on batter score board only
+- Terminal-only SP coverage warnings (no blocking Streamlit banner)
+- README [Command reference](#command-reference) expanded (`ensure_features --fix`, pipeline flags)
+
+---
+
+### 2026-08-22 — Batter Score validation passed
+
+**Context:** Track 1 ROADMAP item #4 — confirm Batter Score ranks batters vs same-game H+TB+BB outcomes.
+
+**Result:** `scripts/backtest_batter_score.py` on 2026-04-01 → 2026-08-21: **33,148** rows, Spearman **0.161** (gate ≥ 0.15) → `data/backtest/batter_score_validation.json` `"validated": true`. Player pages show **✓ Batter Score validated**. Board edge/ranking unchanged.
+
+---
 
 ### 2026-08-19 — Post-v3 board filter UX (AND combine, chips, header sort)
 
@@ -2005,12 +2339,12 @@ Documented in [Quick start → Version Compare](#open-streamlit-and-version-comp
 
 ---
 
-### 2026-08-19 — Dual-head pitcher K / walks (classifier + regressor)
+### 2026-08-19 — Dual-head pitcher K / walks / outs (classifier + regressor)
 
-**Context:** Count props (strikeouts, walks) benefit from an expected-count view alongside the existing Over/Under classifier. Post-v3 architecture per [docs/ROADMAP.md](docs/ROADMAP.md).
+**Context:** Count props (strikeouts, walks, outs) benefit from an expected-count view alongside the existing Over/Under classifier. Post-v3 architecture per [docs/ROADMAP.md](docs/ROADMAP.md).
 
-**Added:**
-- [`distributional.py`](distributional.py) — `DUAL_HEAD_MARKETS` (`pitcher_strikeouts`, `pitcher_walks`); Poisson regressor outputs `predicted_count`, `dist_over_probability`
+**Added (2026-08-19 — K/walks; outs added 2026-08-22):**
+- [`distributional.py`](distributional.py) — `DUAL_HEAD_MARKETS` (`pitcher_strikeouts`, `pitcher_walks`, `pitcher_outs`); Poisson regressor outputs `predicted_count`, `dist_over_probability`
 - [`scripts/fit_distributional.py`](scripts/fit_distributional.py) → `models/v2/dist/{market}.pkl`; [`./run_evaluation.sh`](#evaluation-pipeline-phase-6)
 - [`predict.py`](predict.py) — dual-head inference for K/walks only; **classifier remains source of truth for edge/EV**
 - Board columns **Pred #** and **Dist Over %**; [`scripts/test_distributional.py`](scripts/test_distributional.py)

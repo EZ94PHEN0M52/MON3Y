@@ -2,7 +2,7 @@
 
 Confirmed architecture for the next modeling iteration. This document supersedes ad-hoc planning notes and is the source of truth for **what we build now** vs **what we defer**.
 
-The completed Phases 1–6 roadmap (historical odds, multi-book intelligence, calibration, etc.) remains documented in [README.md](../README.md#roadmap-phases-16). This file covers the **dual-head count-market upgrade** and Batter Score validation track.
+The completed Phases 1–6 roadmap (historical odds, multi-book intelligence, calibration, etc.) remains documented in [README.md](../README.md#roadmap-phases-16). This file covers the **dual-head count-market upgrade**, **Batter Score validation**, and **Track 1 pitcher outs learning**.
 
 ---
 
@@ -11,17 +11,17 @@ The completed Phases 1–6 roadmap (historical odds, multi-book intelligence, ca
 | Decision | Choice |
 |----------|--------|
 | **Model shape** | Lightweight **50/50 dual-head** per market: **classifier** (beat the line?) + **regressor** (expected count) |
-| **Markets v1** | **Pitcher strikeouts** and **pitcher walks** only — no earned runs in v1 |
+| **Markets v1** | **Pitcher strikeouts**, **pitcher walks**, and **pitcher outs** — no earned runs in v1 |
 | **Batter Score** | Parallel **validation track**; excluded from board rankings/edge until validated; show `batter_score_validated` flag on player page once criteria are met |
 | **Heavier upgrades** | Deferred to Phase 2+ (see below) |
 
 ### Canonical market keys (pitcher v1)
 
-| Layer | Strikeouts | Walks |
-|-------|------------|-------|
-| Odds API / board / scoring (`odds_api.py`, `prop_scoring.py`, `ui/market_filters.py`) | `pitcher_strikeouts` | `pitcher_walks` |
-| Training stat columns (`train.py` `PITCHER_MARKETS`) | `strikeouts` → saves `pitcher_strikeouts.pkl` | `walks` → saves `pitcher_walks.pkl` |
-| Distributional Poisson (`distributional.py`) | `pitcher_strikeouts` | `pitcher_walks` |
+| Layer | Strikeouts | Walks | Outs |
+|-------|------------|-------|------|
+| Odds API / board / scoring | `pitcher_strikeouts` | `pitcher_walks` | `pitcher_outs` |
+| Training stat columns | `strikeouts` | `walks` | `outs` |
+| Distributional Poisson | `pitcher_strikeouts` | `pitcher_walks` | `pitcher_outs` |
 
 **Out of v1 scope:** `pitcher_earned_runs` (and ER with projected innings) — deferred until count markets are stable.
 
@@ -29,16 +29,16 @@ The completed Phases 1–6 roadmap (historical odds, multi-book intelligence, ca
 
 ## Phase 1 — Now (lightweight dual-head)
 
-**Goal:** Ship a minimal dual-head pipeline for pitcher K and walks without the heavier feedback-loop or nightly retrain machinery.
+**Goal:** Ship a minimal dual-head pipeline for pitcher K, walks, and outs without the heavier feedback-loop or nightly retrain machinery.
 
-**Status (Aug 2026):** Core dual-head inference shipped for `pitcher_strikeouts` and `pitcher_walks`. Classifier remains the source of truth for edge/EV; regressor outputs (`predicted_count`, `dist_over_probability`) are visible on the board. **50/50 probability blend deferred** to Phase 2+ (see composite retrain item below).
+**Status (Aug 2026):** Core dual-head inference shipped for `pitcher_strikeouts`, `pitcher_walks`, and `pitcher_outs`. Classifier remains the source of truth for edge/EV; regressor outputs (`predicted_count`, `dist_over_probability`) are visible on the board. **50/50 probability blend deferred** to Phase 2+ (see composite retrain item below).
 
 ### Modeling
 
 | Item | Status |
 |------|--------|
 | Classifier head (P(actual > line)) — unchanged | **Done** |
-| Poisson regressor head (expected count μ) — `fit_distributional.py` → `models/v2/dist/{market}.pkl` | **Done** |
+| Poisson regressor head (expected count μ) — `fit_distributional.py` → `models/v2/dist/{market}.pkl` | **Done** (K, walks, outs) |
 | Dual-head inference in `predict.py` (`DUAL_HEAD_MARKETS`) | **Done** |
 | 50/50 blend of classifier + regressor over probability for edge | **Deferred** (Phase 2+) |
 | Training on existing feature parquets / real-book lines | **Done** (no outcome log or nightly retrain) |
@@ -51,7 +51,7 @@ The completed Phases 1–6 roadmap (historical odds, multi-book intelligence, ca
 | `predicted_count` (regressor μ, 1 decimal) | **Done** |
 | `dist_over_probability` (Poisson P(over) from μ + line) | **Done** |
 | Edge / EV from classifier path only (Phase 1) | **Done** |
-| **Markets in scope:** `pitcher_strikeouts`, `pitcher_walks`; other markets unchanged | **Done** |
+| **Markets in scope:** `pitcher_strikeouts`, `pitcher_walks`, `pitcher_outs`; other markets unchanged | **Done** |
 
 ### Batter Score (validation track)
 
@@ -92,6 +92,35 @@ Optional per-row detail: `--write-detail` → `batter_score_validation_detail.pa
 | Validation loader | `load_batter_score_validation()` / `is_batter_score_validated()` in `batter_score_data.py` |
 | Player-page flag | `ui/batter_score.py` |
 | Board edge / ranking | **Excluded** until validated + explicit wiring |
+| **Validation run (2026-08-22)** | **PASS** — Spearman 0.161, n=33,148 |
+
+---
+
+## Track 1 — Pitcher outs learning loop ✅ v1 shipped
+
+Self-learning for **`pitcher_outs` only** — log predictions, join outcomes, single-market retrain. Full docs: [README → Pitcher outs learning loop](../README.md#pitcher-outs-learning-loop-track-1).
+
+| Component | Path | Status |
+|-----------|------|--------|
+| Prediction logging | `learning_log.py` + `predict.py` hook | **Done** |
+| Outcome join | `scripts/log_outcomes.py` | **Done** |
+| Single-market retrain | `scripts/retrain_market.py` | **Done** |
+| Orchestration script | `run_pitcher_outs_learning.sh` | **Done** |
+| Poisson dual-head for outs | `distributional.py` + `--fit-distributional` | **Done** |
+
+**Board impact:**
+
+| Action | UI change |
+|--------|-----------|
+| Log / join only | None |
+| Retrain classifier + re-predict | Pitcher Outs Over % / Edge / EV may change |
+| `--fit-distributional` | **Pred #** and **Dist Over %** populate for outs (existing columns) |
+
+**Deferred (Track 1 Phase 2):**
+
+- Feed `prediction_error_l5` from `outcomes_log` back into features
+- Scheduled nightly `run_retrain.sh`
+- Auto-calibrator refresh for outs from logged outcomes
 
 ---
 
@@ -106,23 +135,26 @@ Heavier items intentionally **not** in Phase 1:
 | **Nightly batch retrain** | `run_retrain.sh` — scheduled full or incremental retrains |
 | **`prev_model_prediction` / `prediction_error_l5` features** | Rolling model error as features for drift correction |
 | **Ridge / ElasticNet baselines, SGD online learning** | Linear baselines and optional online updates |
-| **Expand count markets** | Additional batter/pitcher count props beyond K + walks |
+| **Expand count markets** | Additional batter/pitcher count props beyond K + walks + outs |
 | **Earned runs with projected innings** | Removed from v1; revisit when IP projection is reliable |
 | **FastAPI** | Optional serving layer if Streamlit-only inference becomes a bottleneck |
+| **Batter Score ML weights** | Learn component weights vs H+TB+BB or PP fantasy (separate track) |
 
 ---
 
 ## Implementation order (suggested)
 
-1. ~~Dual-head train/infer for `pitcher_strikeouts` and `pitcher_walks`~~ **Done** (classifier + regressor; blend deferred)
-2. ~~Board columns for dual-head outputs~~ **Done** (`predicted_count`, `dist_over_probability`)
-3. ~~Batter Score backtest harness + validation criteria doc update~~ **Done** (`scripts/backtest_batter_score.py`)
-4. Flip `batter_score_validated` when gates pass (run backtest; JSON flag drives player page)
-5. Phase 2+ items as capacity allows (50/50 blend, 65/35 retrain, outcomes log, etc.)
+1. ~~Dual-head train/infer for `pitcher_strikeouts` and `pitcher_walks`~~ **Done**
+2. ~~Board columns for dual-head outputs~~ **Done**
+3. ~~Batter Score backtest harness + validation criteria doc update~~ **Done**
+4. ~~Flip `batter_score_validated` when gates pass~~ **Done** (2026-08-22)
+5. ~~Track 1 pitcher outs learning loop (log → join → retrain)~~ **Done** (2026-08-22)
+6. Phase 2+ items as capacity allows (50/50 blend, 65/35 retrain, error features, nightly retrain)
 
 ---
 
 ## Related docs
 
 - [README — Roadmap Phases 1–6](../README.md#roadmap-phases-16) — completed pipeline phases (odds history, multi-book, calibration, CLV, etc.)
+- [README — Pitcher outs learning](../README.md#pitcher-outs-learning-loop-track-1) — workflow and board impact
 - [README — Markets table](../README.md) — full `PROP_MARKETS` list including out-of-v1 pitcher props

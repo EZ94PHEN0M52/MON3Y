@@ -2,7 +2,7 @@
 Train Poisson rate models for distributional prop scoring (Phase 6 / Phase 1).
 
 Saves models to models/{version}/dist/{market}.pkl for batter_hits,
-pitcher_strikeouts, and pitcher_walks.
+pitcher_strikeouts, pitcher_walks, and pitcher_outs.
 """
 
 import argparse
@@ -61,6 +61,8 @@ def fit_distributional_models(
     start_date: str,
     end_date: str,
     version: str = "v2",
+    *,
+    markets: list[str] | None = None,
 ):
     version = normalize_version(version)
     feature_sets = feature_columns_for_version(
@@ -68,9 +70,16 @@ def fit_distributional_models(
     )
     saved = {}
 
-    for market, config in (
-        DISTRIBUTIONAL_MARKETS.items()
-    ):
+    market_items = DISTRIBUTIONAL_MARKETS.items()
+    if markets is not None:
+        allowed = set(markets)
+        market_items = [
+            (market, config)
+            for market, config in market_items
+            if market in allowed
+        ]
+
+    for market, config in market_items:
         role = config["role"]
         stat = config["stat"]
         features = feature_sets[role]
@@ -149,12 +158,23 @@ def main():
         help="Model version (default: v2)",
     )
 
+    parser.add_argument(
+        "--market",
+        action="append",
+        dest="markets",
+        help=(
+            "Train one distributional model (repeatable). "
+            "Default: all DISTRIBUTIONAL_MARKETS."
+        ),
+    )
+
     args = parser.parse_args()
 
     saved = fit_distributional_models(
         args.start,
         args.end,
         version=args.version,
+        markets=args.markets,
     )
 
     print()

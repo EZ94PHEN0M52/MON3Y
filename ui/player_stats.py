@@ -7,7 +7,13 @@ import numpy as np
 import pandas as pd
 
 from ui.market_filters import EXCLUDED_UI_MARKETS
-from utils import PROCESSED_DIR, normalize_player_key, normalize_version
+from utils import (
+    PROCESSED_DIR,
+    TEAM_ABBR_TO_ODDS,
+    canonical_odds_team_key,
+    normalize_player_key,
+    normalize_version,
+)
 
 PRIZEPICKS_FANTASY_LINES_PATH = (
     PROCESSED_DIR / "prizepicks_fantasy_lines.parquet"
@@ -81,10 +87,19 @@ def _load_features(path_key):
     return pd.read_parquet(path_str)
 
 
-def get_last_n_games(player_name, market, version="v2", n=10):
+def get_last_n_games(
+    player_name,
+    market,
+    version="v2",
+    n=10,
+    opponent_abbr=None,
+):
     """
     Return a dataframe indexed by game label with one stat column for the
     player's last *n* games (oldest to newest), or None if unavailable.
+
+    When *opponent_abbr* is set, only games vs that team (feature parquet
+    ``opponent`` column) are included before taking the last *n* rows.
     """
     if market not in MARKET_STAT_MAP:
         return None
@@ -109,11 +124,22 @@ def get_last_n_games(player_name, market, version="v2", n=10):
     if player_rows.empty:
         return None
 
+    if opponent_abbr is not None:
+        player_rows = _filter_games_vs_opponent(
+            player_rows,
+            opponent_abbr,
+        )
+        if player_rows.empty:
+            return None
+
     recent = (
         player_rows.sort_values("game_date")
         .tail(n)
         .copy()
     )
+
+    if recent.empty:
+        return None
 
     recent["game_label"] = (
         pd.to_datetime(recent["game_date"])
@@ -169,6 +195,7 @@ def get_stat_history(
     market,
     version="v2",
     n=10,
+    opponent_abbr=None,
 ):
     """Last *n* games for any supported market (alias for get_last_n_games)."""
     return get_last_n_games(
@@ -176,7 +203,131 @@ def get_stat_history(
         market,
         version=version,
         n=n,
+        opponent_abbr=opponent_abbr,
     )
+
+
+def _filter_games_vs_opponent(player_rows, opponent_abbr):
+    if player_rows.empty or "opponent" not in player_rows.columns:
+        return player_rows.iloc[0:0]
+
+    target = str(opponent_abbr).strip().upper()
+    if not target:
+        return player_rows.iloc[0:0]
+
+    mask = (
+        player_rows["opponent"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .eq(target)
+    )
+    return player_rows[mask]
+
+
+def _odds_team_to_statcast_abbr(team_name):
+    """Map Odds API team name (or abbr) to feature-parquet team abbreviation."""
+    if not isinstance(team_name, str) or not team_name.strip():
+        return None
+
+    target_key = canonical_odds_team_key(team_name)
+    if not target_key:
+        return None
+
+    for abbr, odds_name in TEAM_ABBR_TO_ODDS.items():
+        if canonical_odds_team_key(odds_name) == target_key:
+            return abbr
+
+    upper = team_name.strip().upper()
+    if upper in TEAM_ABBR_TO_ODDS:
+        return upper
+
+    return None
+
+
+def opponent_display_name(opponent_abbr):
+    if not opponent_abbr:
+        return "—"
+    return TEAM_ABBR_TO_ODDS.get(
+        str(opponent_abbr).strip().upper(),
+        str(opponent_abbr).strip().upper(),
+    )
+
+
+def lookup_player_team_abbr(player_name, kind, version="v2"):
+    cache = _kind_player_game_cache(
+        _kind_player_cache_key(kind, version)
+    )
+    if not cache:
+        return None
+
+    player_key = _fuzzy_player_key(player_name, cache.keys())
+    if player_key is None:
+        return None
+
+    latest = cache[player_key].sort_values("game_date").iloc[-1]
+    team = latest.get("team")
+    if pd.isna(team) or not str(team).strip():
+        return None
+
+    return str(team).strip().upper()
+
+
+def slate_opponent_abbr(
+    player_name,
+    home_team,
+    away_team,
+    kind,
+    version="v2",
+):
+    """
+    Statcast abbreviation for today's opposing team, or None if unknown.
+    """
+    player_team = lookup_player_team_abbr(
+        player_name,
+        kind,
+        version=version,
+    )
+    home_abbr = _odds_team_to_statcast_abbr(home_team)
+    away_abbr = _odds_team_to_statcast_abbr(away_team)
+
+    if not home_abbr or not away_abbr:
+        return None
+
+    if player_team == home_abbr:
+        return away_abbr
+    if player_team == away_abbr:
+        return home_abbr
+
+    return None
+
+
+def count_games_vs_opponent(
+    player_name,
+    market,
+    opponent_abbr,
+    version="v2",
+):
+    """Number of completed games vs *opponent_abbr* in the feature window."""
+    if market not in MARKET_STAT_MAP or not opponent_abbr:
+        return 0
+
+    kind, _stat_col = MARKET_STAT_MAP[market]
+    cache = _kind_player_game_cache(
+        _kind_player_cache_key(kind, version)
+    )
+    if not cache:
+        return 0
+
+    player_key = _fuzzy_player_key(player_name, cache.keys())
+    if player_key is None:
+        return 0
+
+    filtered = _filter_games_vs_opponent(
+        cache[player_key],
+        opponent_abbr,
+    )
+    return int(len(filtered))
 
 
 def _player_key(name):

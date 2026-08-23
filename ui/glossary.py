@@ -30,14 +30,15 @@ GLOSSARY = {
     ),
     "predicted_count": (
         "Expected stat count (μ) from the Poisson regressor head for "
-        "pitcher strikeouts and walks. Shown alongside the classifier "
+        "pitcher strikeouts, walks, and outs. Shown alongside the classifier "
         "Over % / Under %; edge and EV still use the classifier path in "
         "Phase 1 (50/50 blend deferred to a later iteration)."
     ),
     "dist_over_probability": (
-        "Poisson regressor P(stat > line) for pitcher strikeouts and walks. "
-        "Derived from Pred # and the posted line. Visible for comparison "
-        "with classifier Over %; not used for edge or EV in Phase 1."
+        "Poisson regressor P(stat > line) for pitcher strikeouts, walks, "
+        "and outs. Derived from Pred # and the posted line. Visible for "
+        "comparison with classifier Over %; not used for edge or EV in "
+        "Phase 1."
     ),
     "over_pct": (
         "Model probability that the player exceeds the posted line "
@@ -296,8 +297,9 @@ GLOSSARY = {
     ),
     "stat_history": (
         "Per-game values for any modeled stat market (batter or pitcher). "
-        "Select Last 5 or Last 10 games; L5 and L10 averages are always "
-        "shown, with the selected window highlighted."
+        "Use **All** for the last 5 / 10 games overall, or **H2H** to filter "
+        "to games vs today's opponent on the slate. L5 and L10 averages "
+        "use the same filtered sample; the chart shows the selected window."
     ),
     "pick_builder": (
         "**Pick Builder** is your session favorites slip — like Pickfinder's "

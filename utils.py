@@ -21,6 +21,7 @@ RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 PREDICTIONS_DIR = DATA_DIR / "predictions"
 BACKTEST_DIR = DATA_DIR / "backtest"
+LEARNING_DIR = DATA_DIR / "learning"
 MODELS_DIR = BASE_DIR / "models"
 
 SUPPORTED_VERSIONS = ("v1", "v2")
@@ -32,6 +33,7 @@ for directory in [
     PROCESSED_DIR,
     PREDICTIONS_DIR,
     BACKTEST_DIR,
+    LEARNING_DIR,
     MODELS_DIR,
 ]:
     directory.mkdir(
@@ -915,6 +917,10 @@ def backtest_output_path(
 BATTER_SCORE_VALIDATION_PATH = (
     BACKTEST_DIR / "batter_score_validation.json"
 )
+
+
+PREDICTIONS_LOG_PATH = LEARNING_DIR / "predictions_log.parquet"
+OUTCOMES_LOG_PATH = LEARNING_DIR / "outcomes_log.parquet"
 
 
 def predictions_path(

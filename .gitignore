@@ -8,6 +8,7 @@ data/raw/
 data/processed/
 data/predictions/
 data/backtest/
+data/learning/
 
 models/
 .DS_Store

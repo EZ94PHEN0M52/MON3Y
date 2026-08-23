@@ -330,6 +330,12 @@ def generate_predictions(
             "commence_time":
                 prop["commence_time"],
 
+            "home_team":
+                prop.get("home_team"),
+
+            "away_team":
+                prop.get("away_team"),
+
             "opening_line":
                 prop.get("opening_line"),
 
@@ -361,6 +367,27 @@ def generate_predictions(
         return result
 
     result = enrich_predictions(result)
+
+    try:
+        from learning_log import append_predictions_log
+
+        appended = append_predictions_log(
+            result,
+            version=version,
+            feature_start=start_date,
+            feature_end=end_date,
+        )
+
+        if appended:
+            print(
+                f"Learning log: appended {appended:,} "
+                "pitcher_outs rows to data/learning/predictions_log.parquet"
+            )
+    except Exception as exc:
+        print(
+            "WARNING: learning log append failed "
+            f"(predictions unchanged): {exc}"
+        )
 
     # -----------------------------------------------------
     # Sort by devigged EV (vig-aware ranking)
