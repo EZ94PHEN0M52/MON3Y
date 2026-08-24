@@ -10,7 +10,9 @@ from batter_score_data import (
     is_batter_score_validated,
     lookup_batter_score,
 )
+from ui.formatting import format_name_with_hand
 from ui.glossary import GLOSSARY
+from ui.player_stats import lookup_pitcher_hand
 
 
 def format_batter_score_display(
@@ -110,7 +112,15 @@ def render_batter_score_summary(
 
     detail_parts = []
     if result.opposing_sp_name:
-        detail_parts.append(f"Opposing SP: **{result.opposing_sp_name}**")
+        sp_hand = lookup_pitcher_hand(
+            result.opposing_sp_name,
+            version=version,
+        )
+        sp_label = format_name_with_hand(
+            result.opposing_sp_name,
+            sp_hand,
+        )
+        detail_parts.append(f"Opposing SP: **{sp_label}**")
     if result.opposing_sp_era_l5 is not None:
         detail_parts.append(
             f"SP ERA (L5): **{result.opposing_sp_era_l5:.2f}**"

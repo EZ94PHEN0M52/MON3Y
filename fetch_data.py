@@ -9,6 +9,7 @@ from pybaseball import (
     cache
 )
 
+from fetch_underdog_fantasy import fetch_and_save_underdog_fantasy_lines
 from odds_api import (
     GAME_MARKETS,
     OddsApiQuotaError,
@@ -150,21 +151,23 @@ def _exit_props_fetch_failure(
     sys.exit(1)
 
 
-def _save_prizepicks_fantasy_lines(
+def _save_dfs_fantasy_lines(
     rows,
     output_file,
+    *,
+    source_label: str,
 ):
-    """Persist PrizePicks batter fantasy score lines (Over side, one row per player)."""
+    """Persist DFS batter fantasy score lines (Over side, one row per player)."""
     if not rows:
         if output_file.exists():
             print(
-                "WARNING: No PrizePicks fantasy rows collected; "
+                f"WARNING: No {source_label} fantasy rows collected; "
                 "keeping existing cache at",
                 output_file,
             )
         else:
             print(
-                "WARNING: No PrizePicks fantasy rows collected."
+                f"WARNING: No {source_label} fantasy rows collected."
             )
         return
 
@@ -177,7 +180,7 @@ def _save_prizepicks_fantasy_lines(
 
     if df.empty:
         print(
-            "WARNING: PrizePicks fantasy fetch returned no Over lines."
+            f"WARNING: {source_label} fantasy fetch returned no Over lines."
         )
         return
 
@@ -203,8 +206,19 @@ def _save_prizepicks_fantasy_lines(
     )
 
     print(
-        f"Saved {len(df):,} PrizePicks fantasy lines:",
+        f"Saved {len(df):,} {source_label} fantasy lines:",
         output_file,
+    )
+
+
+def _save_prizepicks_fantasy_lines(
+    rows,
+    output_file,
+):
+    _save_dfs_fantasy_lines(
+        rows,
+        output_file,
+        source_label="PrizePicks",
     )
 
 
@@ -230,6 +244,10 @@ def fetch_current_props():
     pp_output_file = (
         PROCESSED_DIR /
         "prizepicks_fantasy_lines.parquet"
+    )
+    ud_output_file = (
+        PROCESSED_DIR /
+        "underdog_fantasy_lines.parquet"
     )
 
     try:
@@ -419,6 +437,16 @@ def fetch_current_props():
         pp_rows,
         pp_output_file,
     )
+
+    try:
+        fetch_and_save_underdog_fantasy_lines(
+            output_path=ud_output_file,
+        )
+    except Exception as ud_exc:
+        print(
+            "WARNING: Underdog fantasy fetch failed:",
+            redact_api_key(ud_exc),
+        )
 
     snapshot_path = save_live_snapshot(df)
 
@@ -656,6 +684,15 @@ if __name__ == "__main__":
         ),
     )
 
+    parser.add_argument(
+        "--underdog-fantasy",
+        action="store_true",
+        help=(
+            "Fetch Underdog batter fantasy-point lines "
+            "→ underdog_fantasy_lines.parquet"
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.statcast:
@@ -684,3 +721,7 @@ if __name__ == "__main__":
     if args.probables:
 
         fetch_and_save_probables()
+
+    if args.underdog_fantasy:
+
+        fetch_and_save_underdog_fantasy_lines()

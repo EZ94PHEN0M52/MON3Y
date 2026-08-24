@@ -7,7 +7,7 @@
 
 **Table of contents:** [Quick start](#quick-start-for-beginners) · [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Pitcher outs learning](#pitcher-outs-learning-loop-track-1) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
 
-> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder). For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
+> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder, PP/Underdog fantasy boards, **Hitter's Life**). For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
 
 ---
 
@@ -33,7 +33,7 @@ The pipeline does four things:
 | **V1** | Rolling form only (simple baseline) |
 | **V2** | + opponent, handedness, park |
 | **V3** | + Phases 1–6 (historical odds, multi-book, calibration, Batter Score, Pick Builder) — frozen at git tag **`v3`** |
-| **Main** | Today’s active code in this folder — same models as V3 plus post-v3 upgrades (dual-head pitcher K/walks, board filter UX, Batter Score validation) |
+| **Main** | Today’s active code in this folder — same models as V3 plus post-v3 upgrades (dual-head pitcher K/walks/outs, Track 1 K/walks/outs learning, **validated** Batter Score + **Batter Score v2** (Savant pitch-type matchup), **Hitter's Life** batting board, **Batter Score Pick Builder**, PrizePicks/Underdog fantasy lines on batter score boards, Rotowire lineup filter, Top Over/Under **Game & time** + L5/L10 %, player stat **H2H** filter, bat/throw **(L)/(R)** labels) |
 
 **Version compare** puts all four generations side-by-side on one table so you can see how **Over %** and **Under %** differ for the same player and market.
 
@@ -257,6 +257,7 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 - **Props & game lines** — Odds API returns upcoming events (tomorrow once posted).
 - **SP props** (`pitcher_strikeouts`, walks, hits allowed, outs) — scored when books post them.
 - **Probables** — fetched for every **Eastern slate date** in `current_props.parquet` (feeds Batter Score opposing-SP lookup).
+- **Fantasy lines** — PrizePicks (`prizepicks_fantasy_lines.parquet`) and Underdog (`underdog_fantasy_lines.parquet`) refresh on every successful `--props` pass (feeds [batter score boards](#batter-score)).
 - **Over % / Edge / EV** — computed at predict time from each player’s latest feature row.
 
 **One timing caveat:** `run_daily.sh` uses `YESTERDAY=$(date -v-1d)` for features. On an **evening** run, that is still **calendar yesterday**, so today’s just-finished box scores are **not** in rolling stats yet — the board is correct for tomorrow’s lines, but L5/L10 and model form are **one slate behind** until the morning pass. Check the player page caption **Game logs through YYYY-MM-DD** to confirm feature freshness.
@@ -271,6 +272,8 @@ See [Shell scripts — quick walkthrough](#shell-scripts--quick-walkthrough) for
 data/processed/batter_features_v2_2026-03-25_YYYY-MM-DD.parquet
 data/processed/pitcher_features_v2_2026-03-25_YYYY-MM-DD.parquet
 data/processed/current_props.parquet
+data/processed/prizepicks_fantasy_lines.parquet
+data/processed/underdog_fantasy_lines.parquet
 data/processed/current_game_lines.parquet
 data/processed/daily_probables.parquet
 data/predictions/predictions_v2.csv
@@ -408,7 +411,7 @@ Full flag tables live in [Command reference](#command-reference). This section i
 | Step | What runs | Skipped by |
 |------|-----------|------------|
 | 1 | `ensure_features.py --fix` — season features through **yesterday** | Never |
-| 2 | `fetch_data.py --props` → `current_props.parquet` | `--skip-props` |
+| 2 | `fetch_data.py --props` → `current_props.parquet`, `prizepicks_fantasy_lines.parquet`, `underdog_fantasy_lines.parquet` | `--skip-props` |
 | 3 | `fetch_data.py --game-lines` → `current_game_lines.parquet` | `--skip-game-lines` |
 | 4 | `fetch_data.py --probables` → `daily_probables.parquet` | `--skip-probables` |
 | 5 | `train.py` (2025 window) | Only `--train` |
@@ -433,7 +436,7 @@ Full flag tables live in [Command reference](#command-reference). This section i
 ./run_daily.sh --skip-props --skip-probables --streamlit  # minimal API; offline re-score
 ```
 
-**Writes:** `data/processed/current_*.parquet`, `data/predictions/predictions_v2.csv`, optionally refreshes feature parquets.
+**Writes:** `data/processed/current_*.parquet`, fantasy-line parquets from `--props`, `data/predictions/predictions_v2.csv`, optionally refreshes feature parquets.
 
 ---
 
@@ -467,25 +470,26 @@ Full flag tables live in [Command reference](#command-reference). This section i
 
 ### 3. `./run_pitcher_outs_learning.sh` — optional Track 1 loop
 
-**Purpose:** Self-learning loop for **pitcher_outs only** — log predictions → join post-game outcomes → retrain outs classifier → re-predict.
+**Purpose:** Self-learning loop for **pitcher_strikeouts**, **pitcher_walks**, and **pitcher_outs** — log predictions → join post-game outcomes → retrain classifiers → re-predict. Use `--market MARKET` for one market only.
 
 **When:** **Weekly** or when enough logged outcomes exist; not required for a normal board day.
 
 ```bash
-./run_pitcher_outs_learning.sh [--fit-distributional] [--streamlit] [skip flags...]
+./run_pitcher_outs_learning.sh [--fit-distributional] [--streamlit] [--market MARKET] [skip flags...]
 ```
 
 | Step | What runs | Skipped by |
 |------|-----------|------------|
-| 1 | `./run_daily.sh` (logging during predict) | `--skip-daily` |
-| 2 | `scripts/log_outcomes.py` — join actual outs to log | `--skip-join` |
-| 3 | `scripts/retrain_market.py` — outs classifier only | `--skip-retrain` |
-| 3b | `scripts/fit_distributional.py --market pitcher_outs` | Only `--fit-distributional` |
-| 4 | `predict.py` — refresh board with new outs model | `--skip-repredict` |
+| 1 | `./run_daily.sh` (logging during predict — all three count markets) | `--skip-daily` |
+| 2 | `scripts/log_outcomes.py` — join actuals to log (per market) | `--skip-join` |
+| 3 | `scripts/retrain_market.py` — classifier retrain (per market) | `--skip-retrain` |
+| 3b | `scripts/fit_distributional.py` (per market) | Only `--fit-distributional` |
+| 4 | `predict.py` — refresh board with new models | `--skip-repredict` |
 
 | Flag | Meaning |
 |------|---------|
-| `--fit-distributional` | Also train Poisson head → **Pred #** / **Dist Over %** for outs |
+| `--market` | One market only (default: strikeouts + walks + outs) |
+| `--fit-distributional` | Also train Poisson heads → **Pred #** / **Dist Over %** for each market |
 | `--skip-daily` | Outcomes + retrain only (no fresh predict log) |
 | `--skip-join` / `--skip-retrain` / `--skip-repredict` | Run subset of steps |
 | `--join-start` / `--join-end` | Outcome join window (default season start → yesterday) |
@@ -538,14 +542,14 @@ cp ../mlb-prop-model-v3/data/predictions/predictions_v2.csv \
 | **Git tag** | `v1` | `v2` | `v3` | — (branch **`main`** on [MON3Y](https://github.com/EZ94PHEN0M52/MON3Y)) |
 | **Player features** | Rolling L3/L5/L10/L20/season | + opponent, handedness, park | + game lines, stolen bases | Same as V3 |
 | **Odds pipeline** | Live props only | Live props only | Phases 1–6 (history, multi-book, movement, calibration) | Same as V3 |
-| **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 |
+| **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 + fantasy-line batter score boards, **Hitter's Life** board, **Batter Score v2**, **Batter Score Pick Builder**, ranking-table Game & time, conditional cell highlights, H2H stat history, Rotowire lineup filter |
 | **Models** | `models/*.pkl` | `models/v1/`, `models/v2/` | `models/v2/` + calibrators + dist | Same as V3 |
 | **Predictions** | `predictions.csv` | `predictions_v2.csv` | `predictions_v2.csv` + `_best.csv` | Same as V3 |
 | **Default CLI** | N/A | `--version v2` | `--version v2` | `--version v2` |
 
 All snapshots can run side-by-side on the same machine. Frozen folders are never modified; active development continues here on **`main`**.
 
-**Next architecture:** Dual-head pitcher K/walks models (classifier + regressor) and Batter Score validation — confirmed plan in [docs/ROADMAP.md](docs/ROADMAP.md). Completed Phases 1–6 are documented below.
+**Next architecture:** PickFinder IP integration (Predictable v3.1) — see [Predictable plan](#predictable--pickfinder-ip-integration-v31-plan) and [docs/ROADMAP.md](docs/ROADMAP.md). Dual-head pitcher models and Batter Score validation are **done** on `main` (see [Changelog](#changelog)).
 
 ---
 
@@ -621,7 +625,7 @@ All inference, UI, and backtest paths read **local parquets and CSVs** first. Li
 | Directory | Contents |
 |-----------|----------|
 | **`data/raw/`** | Statcast pitch-level (`statcast_{start}_{end}.parquet`), historical odds partitions (`odds/historical/date=…/`), intraday prop snapshots (`odds/snapshots/`) |
-| **`data/processed/`** | Batter/pitcher feature parquets, `current_props.parquet`, `current_game_lines.parquet`, `daily_probables.parquet` |
+| **`data/processed/`** | Batter/pitcher feature parquets, `current_props.parquet`, `current_game_lines.parquet`, `daily_probables.parquet`, `prizepicks_fantasy_lines.parquet`, `underdog_fantasy_lines.parquet`, `rotowire_lineups.parquet` (cached on first Hitter's Life lineup filter) |
 | **`data/predictions/`** | `predictions_v2.csv`, `predictions_v2_best.csv` (written by `predict.py`; read by Streamlit) |
 | **`data/backtest/`** | Backtest CSVs and `batter_score_validation.json` |
 
@@ -634,7 +638,8 @@ Downstream code must not call pybaseball, the Odds API, or the MLB Stats API dir
 | Script | API | Writes |
 |--------|-----|--------|
 | `fetch_data.py --statcast` | pybaseball Statcast | `data/raw/statcast_{start}_{end}.parquet` |
-| `fetch_data.py --props` | Odds API (via `odds_api.py`) | `data/processed/current_props.parquet` + snapshot |
+| `fetch_data.py --props` | Odds API (via `odds_api.py`) + Underdog public API (fantasy lines) | `data/processed/current_props.parquet`, `prizepicks_fantasy_lines.parquet`, `underdog_fantasy_lines.parquet` + snapshot |
+| `fetch_data.py --underdog-fantasy` | Underdog public API (via [`fetch_underdog_fantasy.py`](fetch_underdog_fantasy.py)) | `data/processed/underdog_fantasy_lines.parquet` |
 | `fetch_data.py --game-lines` | Odds API | `data/processed/current_game_lines.parquet` |
 | `fetch_data.py --probables` | MLB Stats API (via `fetch_probables.py`) | `data/processed/daily_probables.parquet` |
 | `fetch_probables.py` | MLB Stats API | same probables parquet |
@@ -718,7 +723,7 @@ Historical odds backfill (`fetch_historical_odds.py`) and evaluation ([`./run_ev
 
 Post-v3 upgrade for count markets **`pitcher_strikeouts`**, **`pitcher_walks`**, and **`pitcher_outs`**: a lightweight **dual-head** — existing LightGBM **classifier** (beat the line?) plus a Poisson **regressor** (expected count μ). Classifier probability remains the source of truth for **edge** and **EV**; regressor outputs (`predicted_count`, `dist_over_probability`) appear on the board for context. Inference: [`predict.py`](predict.py) (`DUAL_HEAD_MARKETS` in [`distributional.py`](distributional.py)). Training: [`scripts/fit_distributional.py`](scripts/fit_distributional.py) → `models/v2/dist/{market}.pkl` (via [`./run_evaluation.sh`](#evaluation-pipeline-phase-6) or [`./run_pitcher_outs_learning.sh --fit-distributional`](#pitcher-outs-learning-loop-track-1)). A 50/50 classifier+regressor probability blend is deferred — see [docs/ROADMAP.md](docs/ROADMAP.md).
 
-**Track 1 self-learning** for outs only (log → join outcomes → retrain) is documented in [Pitcher outs learning loop](#pitcher-outs-learning-loop-track-1).
+**Track 1 self-learning** for pitcher K / walks / outs (log → join outcomes → retrain) is documented in [Pitcher count-market learning loop](#pitcher-outs-learning-loop-track-1).
 
 ---
 
@@ -955,7 +960,7 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 
 ## Batter Score
 
-**Status:** **Phase A ✅** (season baseline + recent form), **Phase B ✅** (SP L5 ERA + H2H in pitcher form), **Phase C ✅** (probable SP pipeline via MLB Stats API), **Phase D ✅** (pitch-type matchup grade from Statcast). **2026-08-19 fixes:** [team abbr mapping](#5-team-abbreviation-mapping-critical-fix), [NaN `sp_id` / TBD IDs](#6-nan-sp_id--tbd-starter-ids-2026-08-19). Backtest validation remains open. Spec: [`batter_score.py`](batter_score.py) · data/UI: [`batter_score_data.py`](batter_score_data.py) · Phase D: [`pitch_matchup.py`](pitch_matchup.py).
+**Status:** **Phase A ✅** (season baseline + recent form), **Phase B ✅** (SP L5 ERA + H2H in pitcher form), **Phase C ✅** (probable SP pipeline via MLB Stats API), **Phase D ✅** (pitch-type matchup grade from Statcast), **Validation backtest ✅** (Spearman gate passed 2026-08-22 — player pages show **✓ Batter Score validated**). **2026-08-19 fixes:** [team abbr mapping](#5-team-abbreviation-mapping-critical-fix), [NaN `sp_id` / TBD IDs](#6-nan-sp_id--tbd-starter-ids-2026-08-19). Spec: [`batter_score.py`](batter_score.py) · data/UI: [`batter_score_data.py`](batter_score_data.py) · board UI: [`ui/batter_score_board.py`](ui/batter_score_board.py) · Phase D: [`pitch_matchup.py`](pitch_matchup.py).
 
 ### 1. Overview
 
@@ -974,11 +979,12 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 
 **UI surfaces:**
 
-- **[Main board](#main-board-apppy--uiboardpy)** — sortable **Batter Score** column with labels **Full** / **Partial** / **Partial · SP TBD** / **Form only** (glossary tooltip)
-- **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter)
-- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** — all slate batters with **Game** selectbox filter ([`ui/batter_score_board.py`](ui/batter_score_board.py))
-- **[Player page](#player-pages-uplayerpy)** — component breakdown (season baseline, recent form, matchup, pitcher form), SP ERA L5 + H2H detail, H+TB+BB last-10 Altair chart
-- **[Stat history](#player-pages-uplayerpy)** — market dropdown (all batter/pitcher prop markets), **L5 / L10** window toggle, rolling averages, per-game Altair bar chart ([`ui/player_stats.py`](ui/player_stats.py))
+- **[Main board](#main-board-apppy--uiboardpy)** — sortable **Batter Score** column with labels **Full** / **Partial** / **Partial · SP TBD** / **Form only** (glossary tooltip); player names show **(L)/(R)** bat/throw hand when known
+- **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter). Columns: Player, **Game & time**, Opposing SP **(L)/(R)**, Vs pitcher, **PP fantasy**, **UD fantasy**, **L5 / L10 %** (vs PP line), **Batter score**, **Batter score v2**. **Conditional highlights:** orange **UD fantasy** when Underdog line &lt; PrizePicks; sky blue when PP = UD; light green **Vs pitcher** when H2H AVG &gt; .300; yellow/green **L5 / L10 %** when L5 ≥ 80% with L10 below/above 80%; red row outline when UD lower + L5/L10 green
+- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** — same columns and highlights as Top 10 for **all** slate batters; **Game** selectbox filters to one matchup; **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
+- **[Hitter's Life](#hitters-life-board)** (`?view=hitters_life`) — batting-context board: Vs SP (name + H2H), **Arsenal wOBA**, season/L5/L10 AVG, pitch-type wOBA selector, **SP arsenal** (Savant pitch names), TB game log; Rotowire lineup filter when a game is selected
+- **[Player page](#player-pages-uplayerpy)** — component breakdown (season baseline, recent form, matchup, pitcher form), SP ERA L5 + H2H detail, H+TB+BB last-10 Altair chart; opposing SP name shows throw hand **(L)/(R)** when known
+- **[Stat history](#player-pages-uplayerpy)** — market dropdown (all batter/pitcher prop markets), **All / H2H** scope toggle (H2H = games vs today's slate opponent), **L5 / L10** window toggle, rolling averages, per-game Altair bar chart ([`ui/player_stats.py`](ui/player_stats.py))
 
 ### 2. Phases A–D (all ✅)
 
@@ -988,8 +994,9 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 | **B** | + opposing SP **ERA L5** + optional **H2H** (≥10 PA) | **Partial** (matchup still gated) | [`compute_batter_score_phase_b()`](batter_score.py); `PHASE_B_GATES` |
 | **C** | SP identification pipeline | Enables Phase B/D when SP known | [`fetch_probables.py`](fetch_probables.py) → `daily_probables.parquet`; [Daily workflow](#daily-workflow-v2) step 4 |
 | **D** | Usage-weighted pitch-type matchup | **Full** (all four components) | [`pitch_matchup.py`](pitch_matchup.py) + [`compute_batter_score_phase_d()`](batter_score.py); `PHASE_D_GATES` |
+| **D v2** | Same composite; matchup uses **Savant pitch types** (4-Seam, Sinker, Sweeper, …) not five buckets | **Full** when detailed arsenal ready | [`build_opponent_pitcher_arsenal_detailed()`](pitch_matchup.py) + [`score_batter_v2()`](batter_score_data.py); shown as **Batter score v2** column on batter score boards |
 
-Scoring path in [`batter_score_data.py`](batter_score_data.py) `score_batter()`: Phase D when SP + Statcast arsenal ready → Phase B when SP + ERA L5 ready → Phase A otherwise. ERA L5 can resolve via **SP name** when `sp_id` is missing (see [NaN sp_id fix](#6-nan-sp_id--tbd-starter-ids-2026-08-19)); H2H and arsenal require a valid numeric ID.
+Scoring path in [`batter_score_data.py`](batter_score_data.py) `score_batter()`: Phase D when SP + Statcast arsenal ready → Phase B when SP + ERA L5 ready → Phase A otherwise. **`score_batter_v2()`** swaps in the detailed Savant arsenal for the matchup component only; season, form, and pitcher form unchanged. ERA L5 can resolve via **SP name** when `sp_id` is missing (see [NaN sp_id fix](#6-nan-sp_id--tbd-starter-ids-2026-08-19)); H2H and arsenal require a valid numeric ID.
 
 ### 3. Component gating and weight renormalization
 
@@ -1051,9 +1058,10 @@ Feature parquets store **`team` as abbreviations** (e.g. `SF`, `CLE`). Probables
 
 [`pitch_matchup.py`](pitch_matchup.py):
 
-- Maps Statcast `pitch_type` codes → **Fastball / Slider / Curveball / Changeup / Other** buckets
-- **Batter:** wOBA + AVG per bucket from Statcast raw (balls in play)
-- **SP:** arsenal usage % per bucket over **last 5 starts**
+- Maps Statcast `pitch_type` codes → **Fastball / Slider / Curveball / Changeup / Other** buckets (**Batter Score v1** matchup grade)
+- **Batter Score v2** and **Hitter's Life → SP arsenal** use individual **Baseball Savant** pitch names from Statcast `pitch_name` (4-Seam Fastball, Sinker, Sweeper, etc.) via `aggregate_pitcher_arsenal_usage_detailed()` / `build_opponent_pitcher_arsenal_detailed()`
+- **Batter:** wOBA + AVG per bucket (v1) or per Savant pitch type (v2) from Statcast raw (balls in play)
+- **SP:** arsenal usage % by bucket (v1) or Savant pitch type (v2) over **last 5 starts**
 - Builds `PitchTypeMatchup` rows for `matchup_grade_index()` in [`batter_score.py`](batter_score.py)
 
 Phase D activates when `arsenal_ready()` returns true (usage sums to ~1.0), SP ERA L5 is available, and **`sp_id` is a valid integer** (not NaN/TBD).
@@ -1084,6 +1092,8 @@ python scripts/backtest_batter_score.py --start 2025-04-01 --end 2025-06-30 --mi
 
 Also reports Pearson correlation and MAE on implied raw points. Optional `--write-detail` saves per-game rows to `data/backtest/batter_score_validation_detail.parquet`.
 
+**Status (2026-08-22):** Gates **passed** on 33,148 batter-games (Spearman **0.161**) — `batter_score_validation.json` has `"validated": true`. Player pages show **✓ Batter Score validated**. See [Changelog](#2026-08-22--batter-score-validation-passed).
+
 See [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls) for the full offline run matrix.
 
 ### 9. Risks, open items, and what's next
@@ -1095,7 +1105,7 @@ See [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls) f
 | TBD `sp_id` with known name | ERA L5 + **Partial** label; H2H/arsenal wait for ID — see [NaN sp_id fix](#6-nan-sp_id--tbd-starter-ids-2026-08-19) |
 | Doubleheaders | Same `(game_date, home, away)` join keys — `commence_time` disambiguation TODO |
 | H2H noise | Gated at **MIN_PA_H2H = 10**; ERA-only below threshold |
-| Not a validated edge | Run [Batter Score validation backtest](#8-validation-backtest-offline); player page shows validated flag when gates pass — board edge unchanged |
+| Not a validated edge | Validation backtest **passed** (2026-08-22) — player page shows **✓ Batter Score validated**; board edge/ranking still unchanged |
 | Partial vs Full sorting | UI shows label; avoid comparing unlike labels on one sort |
 
 **Open polish:** doubleheader `commence_time` join, stale probables badge, optional team ERA proxy validation.
@@ -1106,7 +1116,7 @@ See [Cache-first data policy](#cache-first-data-policy-no-redundant-api-calls) f
 
 ## Predictable — PickFinder IP integration (v3.1 plan)
 
-The active workspace is evolving into **Predictable** — the same MLB prop research pipeline with planned enrichment from **PickFinder implied probability (IP)** on the main board. This section documents the **v3.1** integration plan. **Phase 1 discovery starts after** the Batter Score game-search board UI lands on `main`.
+The active workspace is evolving into **Predictable** — the same MLB prop research pipeline with planned enrichment from **PickFinder implied probability (IP)** on the main board. This section documents the **v3.1** integration plan. **Phase 1 discovery** can start from the current `main` baseline (Batter Score game filter and fantasy-line boards are already on `main`).
 
 > **⚠️ Pre-flight — snapshot before v3.1 work**
 >
@@ -1147,7 +1157,7 @@ Map PickFinder display labels to this repo's `market` keys before join:
 
 Confirm exact PickFinder strings in Phase 1 — aliases may differ slightly from the table above.
 
-### Phase 1 — DevTools discovery (start here after UI work)
+### Phase 1 — DevTools discovery (start here)
 
 PickFinder requires an **active subscription**. Use a logged-in browser session to capture live API traffic:
 
@@ -1283,7 +1293,7 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 **What `run_daily.sh` does:**
 
 1. **`scripts/ensure_features.py --fix`** — validates V2 batter/pitcher feature parquets for the current season (`SEASON_START=2026-03-25` → yesterday). Compares each file to columns required by `train.feature_columns_for_version()`, parquet schema fingerprint (`PARQUET_FEATURE_SCHEMA_VERSION`), and `build_features.py` / `features_v2.py` / `game_lines.py` mtimes. If anything is missing or stale, `--fix` removes old parquets, fetches Statcast when needed, and runs `build_features.py`, then re-verifies (pipeline aborts if still broken). Edits to `train.py` or `training_odds.py` (derived line features, line-source logic) do **not** trigger rebuilds. After [Phase 5](#phase-5--expand-markets-strategically--done), expect a **one-time schema rebuild** when `PARQUET_FEATURE_SCHEMA_VERSION` bumps to `"3"`.
-2. **`fetch_data.py --props`** — today's sportsbook player prop lines; also appends an intraday snapshot to `data/raw/odds/snapshots/` ([Phase 4](#phase-4--line-movement--intraday-snapshots--done))
+2. **`fetch_data.py --props`** — today's sportsbook player prop lines; PrizePicks standard markets from Odds API `us_dfs`; **PrizePicks fantasy** lines → `prizepicks_fantasy_lines.parquet`; **Underdog fantasy** lines → `underdog_fantasy_lines.parquet` (Underdog public API via [`fetch_underdog_fantasy.py`](fetch_underdog_fantasy.py) — not available from Odds API). Also appends an intraday snapshot to `data/raw/odds/snapshots/` ([Phase 4](#phase-4--line-movement--intraday-snapshots--done))
 3. **`fetch_data.py --game-lines`** — today's game totals and run lines → `data/processed/current_game_lines.parquet`
 4. **`fetch_data.py --probables`** — today's probable starting pitchers → `data/processed/daily_probables.parquet` ([Batter Score Phase C](#batter-score))
 5. **`train.py --version v2 --line-source auto`** — only with `--train`; uses `TRAIN_START=2025-04-01`, `TRAIN_END=2025-06-30`. Trains on **real book consensus lines** when historical props exist (`data/raw/odds/historical/`), otherwise falls back to synthetic thresholds. With `--train`, step 1 also re-validates and rebuilds training-window features for that range.
@@ -1328,13 +1338,13 @@ SEASON_START=2026-03-25   # Opening day; update each season
 python fetch_data.py --props
 ```
 
-**What it does:** Calls The Odds API for every MLB game on today's slate and downloads current player prop lines for all [supported markets](#supported-prop-markets) (hits, HR, total bases, RBI, runs, batter walks, hits+runs+RBIs, strikeouts, pitcher walks, hits allowed, pitcher outs, earned runs) from US books (DraftKings, FanDuel, BetMGM, etc.).
+**What it does:** Calls The Odds API for every MLB game on today's slate and downloads current player prop lines for all [supported markets](#supported-prop-markets) (hits, HR, total bases, RBI, runs, batter walks, hits+runs+RBIs, strikeouts, pitcher walks, hits allowed, pitcher outs, earned runs) from US books (DraftKings, FanDuel, BetMGM, etc.). Also merges **PrizePicks** standard props from Odds API `us_dfs`, writes **PrizePicks fantasy score** lines to `prizepicks_fantasy_lines.parquet`, and fetches **Underdog fantasy score** lines from Underdog's public API into `underdog_fantasy_lines.parquet` (feeds [batter score boards](#batter-score)).
 
 **When to use:** Run **first**, every time you want fresh predictions. Props move through the day; run again if you want updated lines closer to first pitch.
 
 **Why it matters:** This is the **market side** of the model. Without this file, `predict.py` has nothing to compare your model probabilities against.
 
-**Output:** `data/processed/current_props.parquet` and an append-only snapshot at `data/raw/odds/snapshots/props_{YYYYMMDD_HHMMSS}.parquet`
+**Output:** `data/processed/current_props.parquet`, `data/processed/prizepicks_fantasy_lines.parquet`, `data/processed/underdog_fantasy_lines.parquet`, and an append-only snapshot at `data/raw/odds/snapshots/props_{YYYYMMDD_HHMMSS}.parquet`
 
 **Notes:**
 - Uses `ODDS_API_KEY` from `.env`. Each event costs one API call; expect ~10–20 calls on a full slate.
@@ -1586,16 +1596,28 @@ All markets below are fetched from The Odds API (`odds_api.py` `PROP_MARKETS`), 
 
 ## Streamlit UI
 
-Launch with `streamlit run app.py` or [`./run_daily.sh --streamlit`](#daily-workflow-v2). Routing uses query params: `?player=Name` for player pages, `?view=top_over` / `?view=top_under` for full ranked lists.
+Launch with `streamlit run app.py` or [`./run_daily.sh --streamlit`](#daily-workflow-v2). Routing uses query params: `?player=Name` for player pages, `?view=top_over` / `?view=top_under` for full ranked lists, `?view=hitters_life` for the [Hitter's Life board](#hitters-life-board), `?view=compare` for version compare.
 
 ### Pick Builder (`ui/pick_builder.py`)
 
 Session favorites slip (Pickfinder-style, **no export**). Picks live in `st.session_state` for the current browser session only.
 
-- **Sidebar:** Always visible below the model version selector — pick count badge; each pick card shows **Player**, **Market**, **Side**, **Line**, **Over % / Under %** (picked side bold), **Edge %**, **Game** (teams + commence time ET), and **Batter Score** on batter markets (with partial label when applicable); **Remove** per pick, **Clear all**
-- **Duplicate prevention:** Same `(player, market, side, line, book)` cannot be added twice
+- **Sidebar — Prop Pick Builder:** Always visible below the model version selector — pick count badge; each pick card shows **Player**, **Market**, **Side**, **Line**, **Over % / Under %** (picked side bold), **Edge %**, **Game** (teams + commence time ET), and **Batter Score** on batter markets (with partial label when applicable); **Remove** per pick, **Clear all**
+- **Sidebar — Batter Score Pick Builder:** Separate slip for batters from **Batter score by game**; duplicate key `(player, game)`; pick cards use the same PP/UD/L5-L10/Vs pitcher **color highlights** as the board ([`ui/batter_score_highlights.py`](ui/batter_score_highlights.py))
+- **Duplicate prevention:** Same `(player, market, side, line, book)` cannot be added twice to the prop slip
 - **Main board:** **Add to Pick Builder** expander below the filtered table — multiselect visible rows, **Add selected**, or **Add top EV**
+- **Batter score by game:** **Add selected** / **Add top batter score** controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
 - **Player page:** Per-market row selector + **Add** / **Add best EV** below each market table
+
+### Hitter's Life board
+
+Dedicated batting-context page at **`?view=hitters_life`** (link **Hitter's Life** on the main board next to Top Over / Top Under). Code: [`ui/hitters_life_page.py`](ui/hitters_life_page.py), [`ui/hitters_life_board.py`](ui/hitters_life_board.py), [`hitters_life_data.py`](hitters_life_data.py).
+
+- **Columns:** Player, **Game & time**, **Vs pitcher** (SP name + H2H hits/AB or SP ERA L5), **Arsenal wOBA** (usage-weighted vs SP mix), **Batting average** (Szn / L5 / L10), **wOBA vs {pitch type}** (selectbox: Fastball, Slider, …), **SP arsenal** (Savant pitch names, usage order), **TB per game** (last 5 games, space-separated)
+- **Highlights:** light green when season AVG &gt; .300 or H2H AVG &gt; .300; light green TB log when every game is non-zero ([`ui/hitters_life_highlights.py`](ui/hitters_life_highlights.py))
+- **Game filter:** same pattern as batter score by game
+- **Lineup filter** (when one game selected): **Rotowire** default lineups vs opposing SP hand ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) → cached `data/processed/rotowire_lineups.parquet`); orders batters 1–9 per team
+- Respects **Market type** filter only (not Edge / EV)
 
 ### Main board (`app.py` → `ui/board.py`)
 
@@ -1603,7 +1625,7 @@ The board always shows **one row per (player, market)** — the book with the hi
 
 **Hint:** To compare prices across books for one player/market, open the **[player page](#player-pages-uplayerpy)** — it lists all books/lines per market with consensus line, devigged %, and best book/EV columns.
 
-- **Sidebar:** V1 / V2 model version selector; **[Pick Builder](#pick-builder-uipick_builderpy)** favorites slip
+- **Sidebar:** V1 / V2 model version selector; **[Prop Pick Builder](#pick-builder-uipick_builderpy)** and **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** favorites slips
 - **Market type** (always visible): full-width multiselect at the top — limits prop categories (Hits, **Batter Walks** / **Pitcher Walks** as distinct labels via [`ui/market_filters.py`](ui/market_filters.py)); synced with Top Over / Under previews. Home runs and stolen bases are excluded from the UI (`EXCLUDED_UI_MARKETS`).
 - **Filters & columns** popover: minimum Edge / EV sliders and **Show columns** visibility
 - **Active filter chips:** when any filter is on, a summary row shows **Active filters:** with each constraint as a chip and a **Clear all filters** button
@@ -1611,10 +1633,10 @@ The board always shows **one row per (player, market)** — the book with the hi
 - **Column header sort buttons:** click a header to sort (up to **3 columns** — first click descending, second click ascending, third click removes; subscript ₁₂₃ shows sort priority). **Clear sort** resets to EV descending. Headers also show filter subscripts when a column filter is active
 - **AND logic:** Market type, min Edge, min EV, and every column filter combine with **AND** — a row must pass all active filters
 - **Summary metrics:** Prop count, best edge, best EV, unique players (reflect Market / Edge / EV filters)
-- **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); links to full lists and **[Version compare](#version-compare-v1--v2--v3--main)**
-- **Top 10 batter score** — highest Batter Score among batters on the slate (best row per player; respects Market type filter; independent of Edge / EV filters)
-- **Batter score by game** — same columns as Top 10 for **all** slate batters; **Game** selectbox filters to one matchup (e.g. `Toronto Blue Jays @ New York Yankees`)
-- **Columns:** Player (link to detail page), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), **Pred #** and **Dist Over %** on pitcher K/walks (dual-head), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
+- **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); columns include **Player** (link, **(L)/(R)** hand when known), **Game & time**, market, book, line, side, Over/Under %, **L5 / L10 %**, Edge; links to full lists, **[Hitter's Life](#hitters-life-board)**, and **[Version compare](#version-compare-v1--v2--v3--main)**
+- **Top 10 batter score** — highest Batter Score among batters on the slate (best row per player; respects Market type filter; independent of Edge / EV filters). See [Batter Score → UI surfaces](#batter-score) for PP/UD fantasy columns, **Batter score v2**, and conditional cell highlights
+- **Batter score by game** — same as Top 10 for **all** slate batters; **Game** selectbox filters to one matchup; **Batter Score Pick Builder** add controls
+- **Columns:** Player (link, **(L)/(R)** when known), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), **Pred #** and **Dist Over %** on pitcher K/walks/outs (dual-head), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
 - **L5 / L10 %:** Share of the player's last 5 / 10 completed games where the stat strictly exceeded the posted line (from feature parquets via [`ui/player_stats.py`](ui/player_stats.py))
 
 Board enrichment is **`@st.cache_data`** in [`app.py`](app.py), keyed on predictions CSV **mtime** — see [Cache-first → Streamlit caching](#zero-api-run-patterns).
@@ -1625,8 +1647,8 @@ See also: [Phase 2 dedupe](#phase-2-multi-bookmaker-intelligence) · [Batter Sco
 
 Open by clicking a player name on the board (`?player=...`).
 
-- Game, first-pitch time, **[Batter Score](#batter-score)** breakdown (season baseline, recent form, matchup, pitcher form; SP ERA L5 / H2H when known), **✓ Batter Score validated** badge when [validation backtest](#8-validation-backtest-offline) gates pass, best edge / EV / prop count / market count
-- **Stat history** — market dropdown (all batter or pitcher markets on the player's slate), **L5 / L10** segmented toggle, rolling averages, Altair bar chart for last N games ([`ui/player_stats.py`](ui/player_stats.py)); caption **Game logs through YYYY-MM-DD** from max `game_date` in feature parquets
+- Game, first-pitch time, **[Batter Score](#batter-score)** breakdown (season baseline, recent form, matchup, pitcher form; SP ERA L5 / H2H when known; opposing SP **(L)/(R)** throw hand), **✓ Batter Score validated** badge when [validation backtest](#8-validation-backtest-offline) gates pass, best edge / EV / prop count / market count
+- **Stat history** — market dropdown (all batter or pitcher markets on the player's slate), **All / H2H** scope toggle (H2H limits game logs to matchups vs today's opponent on the slate), **L5 / L10** segmented toggle, rolling averages, Altair bar chart for last N games ([`ui/player_stats.py`](ui/player_stats.py)); caption **Game logs through YYYY-MM-DD** from max `game_date` in feature parquets
 - Batter Score section: H+TB+BB last-10 Altair chart (composite input stat)
 - **Per-market sections (all books):** every book/line for that player and market, plus consensus line caption and last-10-games chart for that market — this is where multi-book comparison lives (not on the main board)
 - **Pick Builder:** row selector + **Add** / **Add best EV** under each market table
@@ -1636,8 +1658,9 @@ Open by clicking a player name on the board (`?player=...`).
 
 Same dedupe rule as the [main board](#main-board-apppy--uiboardpy): one best-EV row per `(player, market)` via [`dedupe_best_prop()`](odds_aggregation.py). See [Phase 2 dedupe](#phase-2-multi-bookmaker-intelligence).
 
-- **Top Over %** (`?view=top_over`): full table ranked by Over %; Market / Edge / EV filters via [`apply_top_level_filters()`](ui/board.py) (uses [`ui/market_filters.py`](ui/market_filters.py) for distinct walk labels)
+- **Top Over %** (`?view=top_over`): full table ranked by Over %; columns match board previews — **Player**, **Game & time**, market, book, line, side, Over %, Under %, **L5 / L10 %**, Edge
 - **Top Under %** (`?view=top_under`): same, ranked by Under %
+- Market / Edge / EV filters via [`apply_top_level_filters()`](ui/board.py) (uses [`ui/market_filters.py`](ui/market_filters.py) for distinct walk labels)
 
 Board previews share the main board's Market / Edge / EV session state. Full list pages use independent filter state.
 
@@ -1728,13 +1751,15 @@ Single script for all live fetches. Each flag is independent; pass only what you
 python fetch_data.py --props
 python fetch_data.py --game-lines
 python fetch_data.py --probables
+python fetch_data.py --underdog-fantasy
 python fetch_data.py --statcast --start YYYY-MM-DD --end YYYY-MM-DD [--force]
 python fetch_data.py --props --game-lines --probables   # combine flags
 ```
 
 | Flag | Requires | Output | API / source |
 |------|----------|--------|--------------|
-| `--props` | — | `data/processed/current_props.parquet` (+ optional snapshot under `data/raw/odds/snapshots/`) | Odds API — player props across books; merges **PrizePicks** standard markets from `us_dfs` when available |
+| `--props` | — | `data/processed/current_props.parquet` (+ optional snapshot under `data/raw/odds/snapshots/`) | Odds API — player props across books; merges **PrizePicks** standard markets from `us_dfs` when available; also writes `prizepicks_fantasy_lines.parquet` and fetches `underdog_fantasy_lines.parquet` (Underdog API) |
+| `--underdog-fantasy` | — | `data/processed/underdog_fantasy_lines.parquet` | Underdog public pick'em API ([`fetch_underdog_fantasy.py`](fetch_underdog_fantasy.py)) — standalone refresh without a full `--props` run |
 | `--game-lines` | — | `data/processed/current_game_lines.parquet` | Odds API — game totals and run lines for today’s slate |
 | `--probables` | — | `data/processed/daily_probables.parquet` | MLB Stats API — probable starting pitchers |
 | `--statcast` | `--start`, `--end` | `data/raw/statcast_{start}_{end}.parquet` | pybaseball → Baseball Savant pitch-level data |
@@ -1743,6 +1768,7 @@ python fetch_data.py --props --game-lines --probables   # combine flags
 **Notes:**
 
 - `--props` on zero rows: preserves non-empty cache and exits non-zero (quota / no games).
+- Underdog fantasy fetch runs at the end of every successful `--props` pass; failures print a **WARNING** and leave the previous `underdog_fantasy_lines.parquet` in place.
 - Probables use **US Eastern** schedule dates (aligned with slate `game_date` from commence times) — avoids UTC date mismatch that caused mass **SP TBD** on the batter score board.
 - Statcast is **not** run on every daily pass — only when [`ensure_features.py --fix`](#ensure_featurespy--flags-and-fix) detects missing or incomplete raw data.
 
@@ -1876,8 +1902,8 @@ Everything downstream depends on them:
 | Consumer | Uses features for |
 |----------|-------------------|
 | **`predict.py`** | Match props to players, build model inputs |
-| **Batter score board** | Game logs, SP ERA L5, H2H vs pitcher |
-| **L5 / L10 % columns** | Recent game history vs lines |
+| **Batter score board** | Game logs, SP ERA L5, H2H vs pitcher, PP/UD fantasy lines |
+| **L5 / L10 % columns** | Recent game history vs lines (board + batter score L5/L10 vs PP fantasy line) |
 | **Player pages** | Stat history, game logs |
 
 No valid features → players get skipped at predict time or show no batter score (e.g. recent call-ups with zero Statcast history).
@@ -1951,20 +1977,21 @@ streamlit run app.py [--server.port 8501]
 
 Reads `predictions.csv` (V1) or `predictions_v2.csv` (V2) from sidebar selection. Enrichment is cache-first — see [Cache-first data policy → Streamlit caching](#zero-api-run-patterns). See [Streamlit UI](#streamlit-ui).
 
-**Board columns (V2):** includes **PP fantasy** (PrizePicks fantasy score line from `prizepicks_fantasy_lines.parquet`) on the batter score board only — not mixed into main prop markets.
+**Batter score boards (V2):** **Top 10 batter score** and **Batter score by game** show **PP fantasy** and **UD fantasy** (from `prizepicks_fantasy_lines.parquet` / `underdog_fantasy_lines.parquet`), **Game & time**, **L5 / L10 %** vs the PP line, and conditional cell highlights — see [Batter Score → UI surfaces](#batter-score). These columns are **not** on the main prop table.
 
 ### run_pitcher_outs_learning.sh — Track 1 self-learning loop
 
-Orchestrates the full **pitcher_outs** collect → join → retrain → re-predict cycle. See [Pitcher outs learning loop (Track 1)](#pitcher-outs-learning-loop-track-1) for context.
+Orchestrates the full **pitcher_strikeouts / pitcher_walks / pitcher_outs** collect → join → retrain → re-predict cycle. See [Pitcher count-market learning loop (Track 1)](#pitcher-outs-learning-loop-track-1) for context.
 
 ```bash
-./run_pitcher_outs_learning.sh [--fit-distributional] [--streamlit] [--skip-daily|--skip-join|--skip-retrain|--skip-repredict]
+./run_pitcher_outs_learning.sh [--fit-distributional] [--streamlit] [--market MARKET] [--skip-daily|--skip-join|--skip-retrain|--skip-repredict]
 ./run_pitcher_outs_learning.sh --help
 ```
 
 | Flag | Meaning |
 |------|---------|
-| *(default)* | All four steps: daily predict (with logging) → join outcomes → retrain classifier → re-predict |
+| *(default)* | All four steps for **all three** count markets |
+| `--market` | Run join/retrain/dist for one market only (e.g. `pitcher_walks`) |
 | `--skip-props` (via daily) | Default — uses cached `current_props.parquet` |
 | `--fetch-props` | Refresh props before predict |
 | `--fit-distributional` | Also train Poisson regressor → **Pred #** / **Dist Over %** on board for outs |
@@ -2004,8 +2031,11 @@ mlb-prop-model/
 ├── run_pitcher_outs_learning.sh  # Track 1: log → join outcomes → retrain outs → re-predict
 ├── run_evaluation.sh      # Phase 6: backtest → calibrators → distributional (not daily)
 ├── docs/
-│   └── ROADMAP.md         # Dual-head pitcher K/walks + Batter Score validation (next)
-├── fetch_data.py          # --props | --game-lines | --probables | --statcast
+│   └── ROADMAP.md         # Predictable v3.1 + future tracks
+├── fetch_data.py          # --props | --game-lines | --probables | --underdog-fantasy | --statcast
+├── fetch_underdog_fantasy.py  # Underdog batter fantasy-point lines → underdog_fantasy_lines.parquet
+├── fetch_rotowire_lineups.py  # Rotowire default lineups (vs RHP/LHP) → rotowire_lineups.parquet
+├── hitters_life_data.py       # Hitter's Life board data (AVG, wOBA, arsenal, TB log)
 ├── fetch_probables.py     # MLB Stats API probable starting pitchers
 ├── batter_score.py        # Batter Score composite (Phases A–D implemented)
 ├── pitch_matchup.py       # Phase D pitch-type arsenal + batter vs pitch stats
@@ -2036,19 +2066,28 @@ mlb-prop-model/
 │   ├── backtest.py        # Historical props vs model edges + outcomes + CLV
 │   ├── fit_calibrators.py # Fit per-market probability calibrators (Phase 6)
 │   ├── fit_distributional.py  # Train Poisson rate models (Phase 6)
-│   ├── test_batter_score.py   # Batter Score unit tests
+│   ├── test_batter_score.py   # Batter Score unit tests + board styling
+│   ├── test_underdog_fantasy.py  # Underdog fantasy API parse tests
+│   ├── test_hitters_life.py      # Hitter's Life + Savant arsenal tests
+│   ├── test_player_stats.py   # L5/L10, PP/UD fantasy lookup tests
 │   ├── test_calibration.py    # Unit tests for Phase 6 calibration/dist
 │   ├── test_odds_movement.py  # Unit tests for Phase 4 snapshots/movement
 │   └── test_phase5.py         # Game lines + stolen bases tests
 ├── ui/
 │   ├── board.py           # Main prop board, filters, top Over/Under previews
+│   ├── batter_score_board.py  # Top 10 + by-game batter score tables (v1 + v2 columns)
+│   ├── batter_score_highlights.py  # Shared PP/UD/L5/L10/Vs pitcher styling (board + pick cards)
+│   ├── hitters_life_page.py   # Hitter's Life page shell (?view=hitters_life)
+│   ├── hitters_life_board.py  # Hitter's Life table, game + lineup filters
+│   ├── hitters_life_highlights.py  # AVG / H2H / TB log cell colors
 │   ├── market_filters.py  # Shared market multiselect (distinct walk labels)
 │   ├── pick_builder.py    # Session favorites slip (Pick Builder)
-│   ├── player.py          # Player detail pages + last-10-games charts
+│   ├── player.py          # Player detail pages + stat history (All/H2H)
 │   ├── top_lists.py       # Full Top Over % / Top Under % pages
-│   ├── player_stats.py    # L5/L10 % and game-log loading
+│   ├── player_stats.py    # L5/L10 %, PP/UD fantasy lines, game-log loading
 │   ├── batter_score.py    # Batter Score player-page UI
-│   ├── formatting.py      # Display helpers, Over/Under % enrichment
+│   ├── formatting.py      # Display helpers, game/time, hand labels, styling
+│   ├── version_compare.py # V1/V2/V3/Main side-by-side board
 │   └── glossary.py        # Tooltips and market labels
 ├── models/
 │   ├── v1/                # V1 models (*.pkl per market)
@@ -2076,7 +2115,7 @@ Local git repo with annotated tags for frozen snapshots. Remote: **[EZ94PHEN0M52
 | **`v2`** | `mlb-prop-model-v2/` | `fec6236` | Pre–Phases 1–6 baseline |
 | **`v3`** | `mlb-prop-model-v3/` | `3de111a` | Phases 1–6 + Batter Score A–D + board filters + Pick Builder |
 
-Active development continues on **`main`** in `mlb-prop-model/`. Post-v3 work (dual-head pitcher K/walks, Batter Score validation, board UX) lands on **`main`** and is documented in [Changelog](#changelog) and [docs/ROADMAP.md](docs/ROADMAP.md).
+Active development continues on **`main`** in `mlb-prop-model/`. Post-v3 work (dual-head K/walks/outs, Track 1 outs learning, validated Batter Score, board/fantasy-line UX) lands on **`main`** and is documented in [Changelog](#changelog) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ```bash
 git remote -v
@@ -2105,6 +2144,7 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | `ensure_features` still fails after `--fix` | Follow [Adding a new feature](#adding-a-new-feature): confirm `BATTER_FEATURES` / `PITCHER_FEATURES` match `batter_stats` / `pitcher_stats` in `build_features.py`, V2 extras match `features_v2.py`, and `PARQUET_FEATURE_SCHEMA_VERSION` was bumped |
 | V1 predictions empty in app | Run `predict.py --version v1` |
 | "No predictions found" in Streamlit | Run `predict.py` (or `./run_daily.sh`) for the sidebar version |
+| **UD fantasy** shows **—** on batter score board | Re-run `python fetch_data.py --props` (or `python fetch_data.py --underdog-fantasy`). Underdog lines come from [`fetch_underdog_fantasy.py`](fetch_underdog_fantasy.py), not Odds API. Check terminal for **WARNING: Underdog fantasy fetch failed**. Player name must fuzzy-match Underdog's `full_name` |
 | L5/L10 % or player charts show "—" | Rebuild V2 features; player name must match feature parquet `player_name` |
 | Player stats / L5–L10 stuck one day behind (e.g. last game 8/17 on 8/19) | `./run_daily.sh` uses **yesterday** as `--end` (`date -v-1d` on macOS). If the pipeline ran before Statcast posted yesterday's games, `data/raw/statcast_*_{end}.parquet` may exist but max `game_date` is still earlier — `ensure_features.py --fix` now detects this and re-fetches. Manual: `python fetch_data.py --statcast --start 2026-03-25 --end $(date -v-1d +%Y-%m-%d) --force` then re-run `./run_daily.sh`. After rebuild, [`ui/player_stats.py`](ui/player_stats.py) **auto-reloads** when feature parquet mtime changes (no Streamlit restart required). Player page shows **Game logs through YYYY-MM-DD** — verify it matches max `game_date` in `data/processed/*_features_v2_*.parquet` |
 | Duplicate **Walk** in market filters / pitcher walks missing | Fixed in [`ui/market_filters.py`](ui/market_filters.py): multiselect options are market **keys** with distinct labels **Batter Walks** / **Pitcher Walks** from [`ui/glossary.py`](ui/glossary.py) `MARKET_LABELS`. Table display uses `market_label()` via [`ui/formatting.py`](ui/formatting.py). Pitcher walks may have few rows but filter correctly when selected |
@@ -2114,9 +2154,9 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | **All SP TBD** / every row **Partial · SP TBD** even when probables show names | **Common fix (2026-08-22):** UTC vs Eastern date mismatch — re-run probables without `--skip-probables`. Also verify (1) `daily_probables.parquet` exists, (2) [`TEAM_ABBR_TO_ODDS`](#5-team-abbreviation-mapping-critical-fix) team mapping, (3) restart Streamlit. See [Changelog → Probables Eastern date](#2026-08-22--probables-eastern-date-sp-coverage--player-matching) |
 | **Luis Garcia Jr.** / suffix players missing from board | Fixed: Jr./Sr. stripped in [`utils.py`](utils.py). Re-run `predict.py`; player must exist in feature parquets |
 | **Brett Bateman** / recent call-ups missing | No Statcast history — run `ensure_features.py --fix` after games accumulate; batter score needs ≥10 games |
-| **Pitcher outs learning** — empty predictions log | Run `predict.py` first; logging is automatic for `pitcher_outs`. Check `data/learning/predictions_log.parquet` |
-| **Pitcher outs learning** — zero outcome joins | Log must cover completed dates; feature parquets need box scores. Adjust `--join-start` / `--join-end` on `log_outcomes.py` |
-| **Pred # / Dist Over %** blank for Pitcher Outs | `./run_pitcher_outs_learning.sh --fit-distributional` then re-predict. Edge still from classifier |
+| **Pitcher outs learning** — empty predictions log | Run `predict.py` first; logging is automatic for `pitcher_strikeouts`, `pitcher_walks`, and `pitcher_outs`. Check `data/learning/predictions_log.parquet` |
+| **Pred # / Dist Over %** blank for Pitcher K / Walks / Outs | `./run_pitcher_outs_learning.sh --fit-distributional` then re-predict. Edge still from classifier |
+| **Pitcher count-market learning** — zero outcome joins | Log must cover completed dates; feature parquets need box scores. Adjust `--join-start` / `--join-end` on `log_outcomes.py` |
 | Batter Score **Partial** vs **Full** — scores look incomparable | **By design:** **Full** = all four components (season, form, matchup, pitcher). **Partial** / **Partial · SP TBD** / **Form only** omit gated components and **renormalize** weights — rank within the same label, not across labels. See [Component gating](#3-component-gating-and-weight-renormalization) |
 | Batter Score unchanged after probables update | Computed at **Streamlit load**, not written to CSV. Restart after `./run_daily.sh` or probables fetch ([Where it runs](#batter-score)) |
 | LightGBM libomp error | `brew install libomp` |
@@ -2132,28 +2172,28 @@ See also: [Operational note — suspended jobs](#operational-note--suspended-job
 
 ---
 
-## Pitcher outs learning loop (Track 1)
+## Pitcher count-market learning loop (Track 1)
 
-Self-learning pipeline for **`pitcher_outs` only** — collect what the model predicted, join post-game actual outs, retrain the classifier (and optionally the Poisson regressor), then refresh the board CSV. Spec: [docs/ROADMAP.md](docs/ROADMAP.md#track-1--pitcher-outs-learning-loop-v1-shipped).
+Self-learning pipeline for **`pitcher_strikeouts`**, **`pitcher_walks`**, and **`pitcher_outs`** — collect what the model predicted, join post-game actuals, retrain classifiers (and optionally Poisson regressors), then refresh the board CSV. Spec: [docs/ROADMAP.md](docs/ROADMAP.md#track-1--pitcher-count-market-learning-loop-v1-shipped).
 
 ### Why this exists
 
-The daily board uses a **frozen** LightGBM classifier (`models/v2/pitcher_outs.pkl`) trained on a fixed historical window. Track 1 adds a **feedback path** so you can:
+The daily board uses **frozen** LightGBM classifiers for the dual-head count markets. Track 1 adds a **feedback path** so you can:
 
-1. **Log** every outs prop the model scores (line, probability, edge, book)
-2. **Measure** how those predictions performed vs actual outs from Statcast/feature parquets
-3. **Retrain** only the outs classifier when you choose — without retraining all 13 markets
-4. **Optionally** fit a Poisson **regressor** so **Pred #** and **Dist Over %** populate on the board (same columns as K/walks)
+1. **Log** every K / walks / outs prop the model scores (line, probability, edge, book)
+2. **Measure** how those predictions performed vs actual stats from feature parquets
+3. **Retrain** one or all three classifiers when you choose — without retraining all 13 markets
+4. **Optionally** fit Poisson **regressors** so **Pred #** and **Dist Over %** populate on the board
 
-This is **not** fully automatic nightly retrain yet — you run the loop when you want to refresh the outs model (e.g. weekly, or after accumulating a few weeks of logged predictions).
+This is **not** fully automatic nightly retrain yet — you run the loop when you want to refresh the count models (e.g. weekly).
 
 ### Board / UI impact
 
 | Stage | Main board | Batter score board | Other markets |
 |-------|------------|-------------------|---------------|
 | **Logging only** (default after `predict.py`) | No visible change | No change | No change |
-| **After classifier retrain + re-predict** | **Pitcher Outs** rows: Over %, Edge, EV may change | No change | No change |
-| **After `--fit-distributional`** | **Pitcher Outs** rows: **Pred #** and **Dist Over %** fill in (existing columns) | No change | No change |
+| **After classifier retrain + re-predict** | **Pitcher K / Walks / Outs** rows: Over %, Edge, EV may change | No change | No change |
+| **After `--fit-distributional`** | Those rows: **Pred #** and **Dist Over %** fill in (existing columns) | No change | No change |
 
 **Unchanged by design:** Edge and EV still come from the **classifier**, not the Poisson head. No new columns are added to the board layout.
 
@@ -2161,18 +2201,21 @@ This is **not** fully automatic nightly retrain yet — you run the loop when yo
 
 | File | Written by | Contents |
 |------|------------|----------|
-| `data/learning/predictions_log.parquet` | `predict.py` (automatic) | Every `pitcher_outs` row scored, with model prob / edge / line / book / `game_date` |
-| `data/learning/outcomes_log.parquet` | `scripts/log_outcomes.py` | Joined actual `outs`, `over_hit`, `prediction_error` per logged prop |
+| `data/learning/predictions_log.parquet` | `predict.py` (automatic) | Every Track 1 count-market row scored, with model prob / edge / line / book / `game_date` |
+| `data/learning/outcomes_log.parquet` | `scripts/log_outcomes.py` | Joined actual stat, `over_hit`, `prediction_error` per logged prop |
 
 ### Recommended: one executable script
 
-Yes — **`./run_pitcher_outs_learning.sh`** wraps all four steps and is the preferred entry point. Use individual commands when you need fine control (e.g. retrain without re-running the full daily pipeline).
+**`./run_pitcher_outs_learning.sh`** wraps all four steps for all three markets (filename kept for compatibility). Use `--market pitcher_outs` for one market only.
 
 ```bash
 # Full loop (default: skip props fetch, use cached lines)
 ./run_pitcher_outs_learning.sh
 
-# Also train Poisson regressor → Pred # / Dist Over % on board for outs
+# One market only
+./run_pitcher_outs_learning.sh --market pitcher_walks
+
+# Also train Poisson regressors → Pred # / Dist Over % on board
 ./run_pitcher_outs_learning.sh --fit-distributional
 
 # Open board when done
@@ -2195,7 +2238,7 @@ Yes — **`./run_pitcher_outs_learning.sh`** wraps all four steps and is the pre
 | Props | *(skipped with `--skip-props`)* | Uses cached `current_props.parquet` — saves Odds API credits |
 | Game lines / probables | `fetch_data.py` | Still runs unless you also pass `--skip-game-lines` / `--skip-probables` |
 | Predict | `predict.py` | Scores all markets → `predictions_v2.csv` |
-| **Log** | `learning_log.py` | Appends **`pitcher_outs` rows only** to `data/learning/predictions_log.parquet` |
+| **Log** | `learning_log.py` | Appends **pitcher_strikeouts**, **pitcher_walks**, and **pitcher_outs** rows to `data/learning/predictions_log.parquet` |
 
 **Why `--skip-props`:** After games start, a fresh props fetch can overwrite pre-game lines with live numbers. For learning, you usually want the same cached slate you already predicted against. Use `./run_daily.sh` without `--skip-props` when you intentionally want fresh lines.
 
@@ -2231,7 +2274,7 @@ python scripts/retrain_market.py \
   --fit-distributional
 ```
 
-**What happens:** Rebuilds training rows from pitcher feature parquets (same path as `train.py`, but **outs only**), fits a new `pitcher_outs.pkl`. With `--fit-distributional`, also writes `models/v2/dist/pitcher_outs.pkl`.
+**What happens:** Rebuilds training rows from pitcher feature parquets (same path as `train.py`, per market), fits new `pitcher_strikeouts.pkl`, `pitcher_walks.pkl`, and/or `pitcher_outs.pkl`. With `--fit-distributional`, also writes matching `models/v2/dist/{market}.pkl` files.
 
 **When to run:** After you have enough logged outcomes to justify a refresh, or on a schedule (weekly). The shell script defaults to **current season start → yesterday** (same feature window as `run_daily.sh` predict). Override with `--train-start` / `--train-end` if needed.
 
@@ -2243,7 +2286,7 @@ python scripts/retrain_market.py \
 python predict.py
 ```
 
-**What happens:** Loads the new `pitcher_outs.pkl` (and dist model if present), rewrites `predictions_v2.csv`. Restart Streamlit if it is already open (or use `--streamlit` on the learning script).
+**What happens:** Loads the new count-market model(s) (and dist models if present), rewrites `predictions_v2.csv`. Restart Streamlit if it is already open (or use `--streamlit` on the learning script).
 
 Filter the main board to **Pitcher Outs** to compare Over % / Edge / Pred # before and after.
 
@@ -2260,6 +2303,39 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 ---
 
 ## Changelog
+
+### 2026-08-24 — Hitter's Life board, Batter Score v2, Batter Score Pick Builder, Savant arsenals
+
+**Context:** Extend batting research beyond the main prop table — detailed pitch-type matchup, a dedicated AVG/wOBA board, and a separate batter favorites slip.
+
+**Added / changed:**
+- **[Hitter's Life](#hitters-life-board)** — `?view=hitters_life`; columns for Vs SP, Arsenal wOBA, Szn/L5/L10 AVG, pitch-type wOBA, **SP arsenal** (Savant names), TB game log; conditional highlights; Rotowire lineup filter ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py), [`hitters_life_data.py`](hitters_life_data.py), [`ui/hitters_life_*.py`](ui/hitters_life_page.py))
+- **Batter Score v2** — same composite as v1 but matchup grade uses **Savant pitch types** (Sinker, Sweeper, …) via [`build_opponent_pitcher_arsenal_detailed()`](pitch_matchup.py) / [`score_batter_v2()`](batter_score_data.py); new column on Top 10 and By game batter score boards
+- **Batter Score Pick Builder** — sidebar slip separate from prop Pick Builder; add from **Batter score by game**; colored PP/UD/L5-L10/Vs pitcher cards ([`ui/batter_score_highlights.py`](ui/batter_score_highlights.py))
+- [`pitch_matchup.py`](pitch_matchup.py) — `PITCH_CODE_TO_SAVANT_NAME`, `aggregate_pitcher_arsenal_usage_detailed()`, `aggregate_batter_pitch_stats_detailed()`, `build_opponent_pitcher_arsenal_detailed()`
+- Track 1 learning extended to **pitcher_strikeouts** and **pitcher_walks** (in addition to outs) in [`learning_log.py`](learning_log.py), [`run_pitcher_outs_learning.sh`](run_pitcher_outs_learning.sh)
+- Tests: [`scripts/test_hitters_life.py`](scripts/test_hitters_life.py), expanded [`scripts/test_batter_score.py`](scripts/test_batter_score.py)
+
+**Board impact:** Main prop edge/EV unchanged. Batter Score v1 column unchanged. New display-only boards/slips.
+
+---
+
+### 2026-08-23 — Underdog fantasy, ranking-table UX, batter score highlights, H2H stat history
+
+**Context:** Post-v3 board polish — DFS fantasy lines for research, clearer slate context on ranking tables, visual signals on batter score boards, and opponent-scoped stat history on player pages.
+
+**Added / changed:**
+- [`fetch_underdog_fantasy.py`](fetch_underdog_fantasy.py) — Underdog public API → `data/processed/underdog_fantasy_lines.parquet` (Odds API `us_dfs` does not return MLB batter fantasy scores for Underdog)
+- [`fetch_data.py`](fetch_data.py) — runs Underdog fantasy fetch after every successful `--props`; standalone `--underdog-fantasy` flag
+- [`ui/batter_score_board.py`](ui/batter_score_board.py) — **PP fantasy** / **UD fantasy** columns; **Game & time**; **L5 / L10 %** vs PP line; conditional highlights (orange UD when UD &lt; PP; yellow/green L5/L10 at 80% threshold; red row outline on combo)
+- [`ui/board.py`](ui/board.py) / [`ui/top_lists.py`](ui/top_lists.py) — **Game & time** and **L5 / L10 %** on Top Over / Top Under previews and full list pages
+- [`ui/formatting.py`](ui/formatting.py) — shared `format_game_time()`; **(L)/(R)** hand suffix on player/SP names across main board and batter score boards
+- [`ui/player.py`](ui/player.py) / [`ui/player_stats.py`](ui/player_stats.py) — stat history **All / H2H** scope toggle vs today's slate opponent
+- Tests: [`scripts/test_underdog_fantasy.py`](scripts/test_underdog_fantasy.py), styling coverage in [`scripts/test_batter_score.py`](scripts/test_batter_score.py)
+
+**Board impact:** Main prop edge/EV unchanged. Batter score and ranking tables are display-only additions/highlights.
+
+---
 
 ### 2026-08-22 — Pitcher outs learning loop (Track 1) + dual-head outs
 
@@ -2286,7 +2362,7 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 **Fixes / changes:**
 - [`fetch_probables.py`](fetch_probables.py), [`utils.py`](utils.py), [`game_lines.py`](game_lines.py) — **US Eastern** schedule dates aligned with slate `game_date` (UTC mismatch caused all SP lookups to fail)
 - [`utils.py`](utils.py) `strip_name_suffix` — **Jr./Sr.** normalization for prop ↔ feature matching (e.g. Luis Garcia Jr.)
-- [`odds_api.py`](odds_api.py) / [`fetch_data.py`](fetch_data.py) — merge PrizePicks standard props; **PP fantasy** column on batter score board only
+- [`odds_api.py`](odds_api.py) / [`fetch_data.py`](fetch_data.py) — merge PrizePicks standard props; **PP fantasy** column on batter score board (Underdog fantasy added 2026-08-23 — see [changelog entry](#2026-08-23--underdog-fantasy-ranking-table-ux-batter-score-highlights-h2h-stat-history))
 - Terminal-only SP coverage warnings (no blocking Streamlit banner)
 - README [Command reference](#command-reference) expanded (`ensure_features --fix`, pipeline flags)
 

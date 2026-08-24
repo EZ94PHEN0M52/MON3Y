@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for Track 1 learning log (pitcher_outs)."""
+"""Unit tests for Track 1 learning log (pitcher K / walks / outs)."""
 
 from __future__ import annotations
 
@@ -23,6 +23,28 @@ from learning_log import (  # noqa: E402
 
 def test_build_prediction_log_rows_filters_market() -> None:
     preds = pd.DataFrame([
+        {
+            "commence_time": "2026-08-22T23:05:00Z",
+            "player": "Gerrit Cole",
+            "market": "pitcher_strikeouts",
+            "side": "over",
+            "line": 6.5,
+            "odds": -110,
+            "bookmaker": "DraftKings",
+            "bookmaker_key": "draftkings",
+            "over_probability": 0.55,
+            "under_probability": 0.45,
+            "model_probability": 0.58,
+            "raw_model_probability": 0.58,
+            "calibrated_probability": 0.57,
+            "market_probability": 0.52,
+            "devigged_market_prob": 0.51,
+            "edge": 0.06,
+            "ev": 0.04,
+            "consensus_line": 6.5,
+            "event_id": "evt1",
+            "game": "NYY @ BOS",
+        },
         {
             "commence_time": "2026-08-22T23:05:00Z",
             "player": "Gerrit Cole",
@@ -77,10 +99,12 @@ def test_build_prediction_log_rows_filters_market() -> None:
         logged_at="2026-08-22T12:00:00+00:00",
     )
 
-    assert len(rows) == 1
-    assert rows.iloc[0]["market"] == "pitcher_outs"
-    assert rows.iloc[0]["game_date"] == "2026-08-22"
-    assert rows.iloc[0]["player"] == "Gerrit Cole"
+    assert len(rows) == 2
+    assert set(rows["market"]) == {
+        "pitcher_strikeouts",
+        "pitcher_outs",
+    }
+    assert (rows["game_date"] == "2026-08-22").all()
 
 
 def test_join_and_append_roundtrip(tmp_path: Path) -> None:

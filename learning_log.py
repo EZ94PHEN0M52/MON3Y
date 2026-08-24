@@ -1,8 +1,7 @@
 """
-Append-only learning logs for single-market retrain loops (Track 1: pitcher_outs).
+Append-only learning logs for single-market retrain loops (Track 1).
 
-Writes under data/learning/ — does not change predictions CSV, board columns,
-edge ranking, or Streamlit UI unless a retrained model is deployed separately.
+Markets: pitcher_strikeouts, pitcher_walks, pitcher_outs (dual-head count props).
 """
 
 from __future__ import annotations
@@ -21,8 +20,17 @@ from utils import (
     resolve_feature_path,
 )
 
-# Track 1 v1 scope — extend when other markets get a learning loop.
-LEARNING_MARKETS = frozenset({"pitcher_outs"})
+LEARNING_MARKETS = frozenset({
+    "pitcher_strikeouts",
+    "pitcher_walks",
+    "pitcher_outs",
+})
+
+LEARNING_MARKETS_ORDERED = (
+    "pitcher_strikeouts",
+    "pitcher_walks",
+    "pitcher_outs",
+)
 
 PREDICTION_LOG_COLUMNS = [
     "logged_at",
@@ -142,7 +150,7 @@ def append_predictions_log(
     path=PREDICTIONS_LOG_PATH,
 ) -> int:
     """
-    Append pitcher_outs (or other learning-market) rows to predictions_log.
+    Append learning-market rows to predictions_log.
 
     Returns number of rows appended. Failures should be caught by callers so
     predict.py never aborts because of logging.

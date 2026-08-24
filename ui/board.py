@@ -6,7 +6,9 @@ import streamlit as st
 from odds_aggregation import dedupe_best_prop
 from ui.formatting import (
     compare_view_path,
+    hitters_life_path,
     format_batter_score_cell,
+    format_game_time,
     format_odds,
     player_path,
     prepare_display_df,
@@ -21,6 +23,7 @@ from ui.batter_score_board import (
     render_top_batter_scores,
 )
 from ui.pick_builder import render_board_add_controls
+from ui.player_stats import lookup_player_hand_for_market
 
 DEFAULT_MIN_EDGE = 0.0
 DEFAULT_MIN_EV = 0.0
@@ -56,12 +59,14 @@ BOARD_TABLE_COLUMNS = [
 
 RANKING_TABLE_COLUMNS = [
     "player_link",
+    "game_time",
     "market",
     "bookmaker",
     "line",
     "side",
     "over_probability",
     "under_probability",
+    "l5_l10_pct",
     "edge",
 ]
 
@@ -401,9 +406,9 @@ def _render_active_filter_summary(key_prefix, df):
         )
 
 
-def _available_table_columns(filtered):
+def _available_table_columns(filtered, version="v2"):
     optional_stats = _optional_stat_columns(filtered.columns)
-    display = _prepare_board_table_df(filtered)
+    display = _prepare_board_table_df(filtered, version=version)
     columns = [
         column
         for column in BOARD_TABLE_COLUMNS
@@ -446,13 +451,13 @@ def _column_filter_specs(df):
     return [spec for spec in _header_specs(df) if spec["field"] != "market"]
 
 
-def _render_filter_popover(df, key_prefix):
+def _render_filter_popover(df, key_prefix, version="v2"):
     _init_board_filter_state(key_prefix)
     visible_key = f"{key_prefix}_visible_columns"
     min_edge_key = f"{key_prefix}_min_edge"
     min_ev_key = f"{key_prefix}_min_ev"
 
-    table_columns, optional_stats = _available_table_columns(df)
+    table_columns, optional_stats = _available_table_columns(df, version=version)
     if visible_key not in st.session_state:
         st.session_state[visible_key] = list(table_columns)
 
@@ -755,7 +760,10 @@ def _board_column_config(extra_stat_columns):
     config = {
         "player_link": st.column_config.LinkColumn(
             "Player",
-            help=GLOSSARY["player_link"],
+            help=(
+                f"{GLOSSARY['player_link']} "
+                "(L) or (R) suffix = bat/throw hand when known from features."
+            ),
             display_text=r"#(.*)$",
         ),
         "game": st.column_config.TextColumn(
@@ -877,11 +885,32 @@ def _board_column_config(extra_stat_columns):
     return config
 
 
-def _prepare_board_table_df(filtered):
+def _prepare_board_table_df(filtered, version="v2"):
     display = prepare_display_df(filtered.copy())
-    display["player_link"] = filtered["player"].map(player_path)
+    display["player_link"] = filtered.apply(
+        lambda row: player_path(
+            row["player"],
+            hand=lookup_player_hand_for_market(
+                row["player"],
+                row.get("market"),
+                version=version,
+            ),
+        ),
+        axis=1,
+    )
     display["bookmaker"] = filtered["bookmaker"].values
     display["odds"] = filtered["odds"].apply(format_odds).values
+
+    if "game" in filtered.columns:
+        commence = (
+            filtered["commence_time"]
+            if "commence_time" in filtered.columns
+            else pd.Series([None] * len(filtered), index=filtered.index)
+        )
+        display["game_time"] = [
+            format_game_time(game, commence_time)
+            for game, commence_time in zip(filtered["game"], commence)
+        ]
 
     for col in (
         "over_probability",
@@ -929,8 +958,15 @@ def _ranking_column_config():
     return {
         "player_link": st.column_config.LinkColumn(
             "Player",
-            help=GLOSSARY["player_link"],
+            help=(
+                f"{GLOSSARY['player_link']} "
+                "(L) or (R) suffix = bat/throw hand when known from features."
+            ),
             display_text=r"#(.*)$",
+        ),
+        "game_time": st.column_config.TextColumn(
+            "Game & time",
+            help=f"{GLOSSARY['game']} {GLOSSARY['commence_time']}",
         ),
         "market": st.column_config.TextColumn(
             "Market",
@@ -958,6 +994,10 @@ def _ranking_column_config():
             "Under %",
             help=GLOSSARY["under_pct"],
             format="%.1f",
+        ),
+        "l5_l10_pct": st.column_config.TextColumn(
+            "L5 / L10 %",
+            help=GLOSSARY["l5_l10_pct"],
         ),
         "edge": st.column_config.NumberColumn(
             "Edge %",
@@ -1042,7 +1082,7 @@ def _apply_ranking_market_filter(filtered, selected_markets):
     return filtered
 
 
-def _render_probability_rankings(filtered, key_prefix):
+def _render_probability_rankings(filtered, key_prefix, version="v2"):
     if filtered.empty:
         return
 
@@ -1068,6 +1108,7 @@ def _render_probability_rankings(filtered, key_prefix):
     with link_row:
         st.markdown(f"**[Top Over %]({top_list_path('top_over')})**")
         st.markdown(f"**[Top Under %]({top_list_path('top_under')})**")
+        st.markdown(f"**[Hitter's Life]({hitters_life_path()})**")
         st.markdown(f"**[Version compare]({compare_view_path()})**")
 
     col_over, col_under = st.columns(2)
@@ -1075,7 +1116,10 @@ def _render_probability_rankings(filtered, key_prefix):
     with col_over:
         st.markdown("**Top Over %**")
         if len(over_top):
-            over_display = _prepare_board_table_df(over_top)[RANKING_TABLE_COLUMNS]
+            over_display = _prepare_board_table_df(
+                over_top,
+                version=version,
+            )[RANKING_TABLE_COLUMNS]
             st.dataframe(
                 style_probability_extremes(over_display),
                 hide_index=True,
@@ -1088,7 +1132,10 @@ def _render_probability_rankings(filtered, key_prefix):
     with col_under:
         st.markdown("**Top Under %**")
         if len(under_top):
-            under_display = _prepare_board_table_df(under_top)[RANKING_TABLE_COLUMNS]
+            under_display = _prepare_board_table_df(
+                under_top,
+                version=version,
+            )[RANKING_TABLE_COLUMNS]
             st.dataframe(
                 style_probability_extremes(under_display),
                 hide_index=True,
@@ -1099,10 +1146,15 @@ def _render_probability_rankings(filtered, key_prefix):
             st.caption("No props in the current filter set.")
 
 
-def _render_board_table(filtered, visible_columns=None, optional_stats=None):
+def _render_board_table(
+    filtered,
+    visible_columns=None,
+    optional_stats=None,
+    version="v2",
+):
     if optional_stats is None:
-        _, optional_stats = _available_table_columns(filtered)
-    display = _prepare_board_table_df(filtered)
+        _, optional_stats = _available_table_columns(filtered, version=version)
+    display = _prepare_board_table_df(filtered, version=version)
     table_columns = [
         column
         for column in BOARD_TABLE_COLUMNS
@@ -1136,7 +1188,11 @@ def render_board(df, version):
             key=f"{key_prefix}_markets",
             label="Market type",
         )
-        visible_columns, optional_stats = _render_filter_popover(df, key_prefix)
+        visible_columns, optional_stats = _render_filter_popover(
+            df,
+            key_prefix,
+            version=version,
+        )
 
     _render_active_filter_summary(key_prefix, df)
 
@@ -1165,7 +1221,7 @@ def render_board(df, version):
     )
 
     if len(filtered):
-        _render_probability_rankings(filtered, key_prefix)
+        _render_probability_rankings(filtered, key_prefix, version=version)
 
         _render_clickable_column_headers(filtered, key_prefix)
         _render_column_filters_panel(filtered, key_prefix)
@@ -1180,6 +1236,7 @@ def render_board(df, version):
                 header_filtered,
                 visible_columns=visible_columns,
                 optional_stats=optional_stats,
+                version=version,
             )
             render_board_add_controls(header_filtered, key_prefix)
         else:

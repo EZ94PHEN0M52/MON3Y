@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retrain a single prop market from feature parquets (Track 1: pitcher_outs)."""
+"""Retrain a single prop market from feature parquets (Track 1 count markets)."""
 
 from __future__ import annotations
 
@@ -35,6 +35,16 @@ from distributional import distributional_model_path  # noqa: E402
 
 
 MARKET_TRAINING_TARGET = {
+    "pitcher_strikeouts": (
+        "pitcher",
+        "strikeouts",
+        PITCHER_MARKETS["strikeouts"],
+    ),
+    "pitcher_walks": (
+        "pitcher",
+        "walks",
+        PITCHER_MARKETS["walks"],
+    ),
     "pitcher_outs": ("pitcher", "outs", PITCHER_MARKETS["outs"]),
 }
 
@@ -196,9 +206,9 @@ def retrain_market(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Retrain one market's LightGBM classifier. Track 1 default: "
-            "pitcher_outs. Does not modify board layout — only replaces "
-            "the model pickle used at predict time."
+            "Retrain one market's LightGBM classifier. Track 1 defaults: "
+            "pitcher_strikeouts, pitcher_walks, pitcher_outs. Does not modify "
+            "board layout — only replaces the model pickle used at predict time."
         ),
     )
     parser.add_argument(
@@ -230,7 +240,7 @@ def main() -> None:
         "--fit-distributional",
         action="store_true",
         help=(
-            "Also train Poisson regressor → models/v2/dist/pitcher_outs.pkl "
+            "Also train Poisson regressor → models/v2/dist/{market}.pkl "
             "(populates Pred # and Dist Over % on board; edge still classifier)"
         ),
     )
@@ -273,9 +283,9 @@ def main() -> None:
     print()
     print(
         "Board impact: re-run predict.py to pick up the new model. "
-        "Over %, Edge, and EV for pitcher_outs rows may change. "
+        f"Over %, Edge, and EV for {args.market} rows may change. "
         "With --fit-distributional, Pred # and Dist Over % also populate "
-        "for outs rows (edge still from classifier)."
+        "for that market (edge still from classifier)."
     )
 
 

@@ -13,6 +13,7 @@ from ui.formatting import (
     market_label,
 )
 from ui.glossary import GLOSSARY
+from ui.batter_score_highlights import format_batter_score_pick_details_html
 from ui.market_filters import EXCLUDED_UI_MARKETS
 from ui.player_stats import BATTER_MARKETS
 
@@ -340,3 +341,221 @@ def render_player_market_add_controls(
             help="Add the highest-EV line in this market.",
         ):
             _add_rows_by_index(market_rows, [best_ev_idx], include_player=False)
+
+
+# ---------------------------------------------------------------------------
+# Batter Score Pick Builder (separate slip — DFS / batter score board rows)
+# ---------------------------------------------------------------------------
+
+BATTER_SCORE_PICKS_STATE_KEY = "batter_score_pick_builder_picks"
+
+
+def batter_score_pick_key(player, game) -> str:
+    """Unique key: (player, game) — one batter row per matchup on the slate."""
+    game_text = str(game or "").strip() or "slate"
+    return "|".join((str(player).strip(), game_text))
+
+
+def _init_batter_score_picks():
+    if BATTER_SCORE_PICKS_STATE_KEY not in st.session_state:
+        st.session_state[BATTER_SCORE_PICKS_STATE_KEY] = {}
+
+
+def get_batter_score_picks() -> list[dict]:
+    _init_batter_score_picks()
+    return list(st.session_state[BATTER_SCORE_PICKS_STATE_KEY].values())
+
+
+def batter_score_pick_count() -> int:
+    return len(get_batter_score_picks())
+
+
+def batter_score_row_to_pick(row: pd.Series) -> dict:
+    """Build a batter-score pick dict from a batter score board row."""
+    player = row.get("player")
+    game = row.get("_game") or ""
+    pick = {
+        "key": batter_score_pick_key(player, game),
+        "player": player,
+        "game": game,
+        "game_time": row.get("game_time"),
+        "opposing_sp": row.get("opposing_sp"),
+        "vs_pitcher": row.get("vs_pitcher"),
+        "pp_fantasy_line": row.get("pp_fantasy_line"),
+        "ud_fantasy_line": row.get("ud_fantasy_line"),
+        "l5_l10_pct": row.get("l5_l10_pct"),
+        "pp_line": row.get("_pp_line"),
+        "ud_line": row.get("_ud_line"),
+        "l5_pct": row.get("_l5_pct"),
+        "l10_pct": row.get("_l10_pct"),
+        "batter_score_display": row.get("batter_score_display"),
+        "batter_score": row.get("_batter_score"),
+        "batter_score_label": row.get("batter_score_label") or "",
+    }
+    return pick
+
+
+def format_batter_score_pick_option(row: pd.Series) -> str:
+    """Human-readable label for batter score board multiselect."""
+    score = row.get("batter_score_display") or "—"
+    game_time = row.get("game_time") or "—"
+    pp = row.get("pp_fantasy_line") or "—"
+    ud = row.get("ud_fantasy_line") or "—"
+    return (
+        f"{row['player']} · BS {score} · {game_time} · "
+        f"PP {pp} / UD {ud}"
+    )
+
+
+def add_batter_score_pick(pick: dict) -> tuple[bool, str]:
+    _init_batter_score_picks()
+    key = pick.get("key") or batter_score_pick_key(
+        pick["player"],
+        pick.get("game"),
+    )
+    pick = {**pick, "key": key}
+
+    if key in st.session_state[BATTER_SCORE_PICKS_STATE_KEY]:
+        return False, "Already on your batter score slip."
+
+    st.session_state[BATTER_SCORE_PICKS_STATE_KEY][key] = pick
+    return True, "Added to Batter Score Pick Builder."
+
+
+def add_batter_score_pick_from_row(row: pd.Series) -> tuple[bool, str]:
+    return add_batter_score_pick(batter_score_row_to_pick(row))
+
+
+def remove_batter_score_pick(key: str) -> None:
+    _init_batter_score_picks()
+    st.session_state[BATTER_SCORE_PICKS_STATE_KEY].pop(key, None)
+
+
+def clear_batter_score_picks() -> None:
+    _init_batter_score_picks()
+    st.session_state[BATTER_SCORE_PICKS_STATE_KEY] = {}
+
+
+def _add_batter_score_rows_by_index(df: pd.DataFrame, indices: list):
+    if not indices:
+        st.warning("Select at least one batter to add.")
+        return
+
+    added = 0
+    skipped = 0
+    for idx in indices:
+        row = df.loc[idx]
+        success, _ = add_batter_score_pick_from_row(row)
+        if success:
+            added += 1
+        else:
+            skipped += 1
+
+    if added and skipped:
+        st.success(
+            f"Added {added} batter(s). {skipped} already on your slip."
+        )
+    elif added:
+        st.success(f"Added {added} batter(s) to Batter Score Pick Builder.")
+    elif skipped:
+        st.info("Selected batters are already on your slip.")
+    st.rerun()
+
+
+def render_sidebar_batter_score_pick_builder():
+    """Sidebar panel for batter score board favorites."""
+    _init_batter_score_picks()
+    count = batter_score_pick_count()
+    title = ":material/groups: Batter Score Picks"
+    if count:
+        title += f" ({count})"
+
+    st.sidebar.markdown(f"### {title}")
+    with st.sidebar.popover(":material/help: What's this?"):
+        st.markdown(GLOSSARY["batter_score_pick_builder"])
+
+    picks = get_batter_score_picks()
+
+    if not picks:
+        st.sidebar.caption(
+            "No batters yet. Add from **Batter score by game** below the board."
+        )
+        return
+
+    if st.sidebar.button(
+        "Clear all batter picks",
+        key="batter_score_pick_builder_clear_all",
+        width="stretch",
+    ):
+        clear_batter_score_picks()
+        st.rerun()
+
+    for pick in picks:
+        with st.sidebar.container(border=True):
+            st.markdown(f"**{pick['player']}**")
+            st.caption(pick.get("batter_score_display") or "—")
+            st.caption(pick.get("game_time") or pick.get("game") or "—")
+            st.caption(f"vs {pick.get('opposing_sp') or 'TBD'}")
+            st.markdown(
+                format_batter_score_pick_details_html(pick),
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "Remove",
+                key=f"batter_score_pick_builder_remove_{pick['key']}",
+                width="stretch",
+            ):
+                remove_batter_score_pick(pick["key"])
+                st.rerun()
+
+
+def render_batter_score_add_controls(filtered_df: pd.DataFrame, key_prefix: str):
+    """Multiselect + add buttons for the batter score by game table."""
+    if filtered_df.empty:
+        return
+
+    board_df = filtered_df.reset_index(drop=True)
+
+    with st.expander(
+        ":material/bookmark_add: Add to Batter Score Pick Builder",
+        expanded=False,
+    ):
+        st.caption(GLOSSARY["batter_score_pick_builder_add"])
+
+        option_indices = list(board_df.index)
+        labels = {
+            idx: format_batter_score_pick_option(board_df.loc[idx])
+            for idx in option_indices
+        }
+
+        selected = st.multiselect(
+            "Batters in current table",
+            options=option_indices,
+            format_func=lambda idx: labels[idx],
+            key=f"{key_prefix}_batter_score_pick_multiselect",
+            placeholder="Choose one or more batters…",
+        )
+
+        add_row = st.container(horizontal=True)
+        with add_row:
+            if st.button(
+                "Add selected",
+                key=f"{key_prefix}_batter_score_pick_add_selected",
+                type="primary",
+            ):
+                _add_batter_score_rows_by_index(board_df, selected)
+
+            if st.button(
+                "Add top batter score",
+                key=f"{key_prefix}_batter_score_pick_add_top",
+                help="Add the highest Batter Score row currently visible.",
+            ):
+                scores = pd.to_numeric(
+                    board_df["_batter_score"],
+                    errors="coerce",
+                )
+                if scores.notna().any():
+                    top_idx = scores.idxmax()
+                    _add_batter_score_rows_by_index(board_df, [top_idx])
+                else:
+                    st.warning("No batter scores in the current table.")

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 #
-# Track 1 — pitcher_outs self-learning loop
+# Track 1 — pitcher count-market self-learning loop
 #
-# Runs the full collect → join → retrain → re-predict cycle for Pitcher Outs.
-# Logging is automatic during predict; this script wires the offline steps.
+# Runs collect → join → retrain → re-predict for pitcher_strikeouts,
+# pitcher_walks, and pitcher_outs (dual-head K / walks / outs).
 #
 # Usage:
 #   ./run_pitcher_outs_learning.sh
-#   ./run_pitcher_outs_learning.sh --skip-daily          # outcomes + retrain only
-#   ./run_pitcher_outs_learning.sh --skip-retrain        # daily + join + re-predict
-#   ./run_pitcher_outs_learning.sh --fit-distributional  # also train Poisson dist head
-#   ./run_pitcher_outs_learning.sh --streamlit           # open board after pipeline
+#   ./run_pitcher_outs_learning.sh --market pitcher_outs     # one market only
+#   ./run_pitcher_outs_learning.sh --skip-daily              # outcomes + retrain only
+#   ./run_pitcher_outs_learning.sh --skip-retrain            # daily + join + re-predict
+#   ./run_pitcher_outs_learning.sh --fit-distributional      # also train Poisson dist heads
+#   ./run_pitcher_outs_learning.sh --streamlit               # open board after pipeline
 #   ./run_pitcher_outs_learning.sh --help
 #
 set -e
@@ -27,6 +28,13 @@ YESTERDAY=$(date -v-1d +%Y-%m-%d)
 TRAIN_START=$SEASON_START
 TRAIN_END=$YESTERDAY
 VERSION=v2
+
+DEFAULT_MARKETS=(
+  pitcher_strikeouts
+  pitcher_walks
+  pitcher_outs
+)
+MARKETS=()
 
 RUN_DAILY=true
 RUN_JOIN=true
@@ -45,6 +53,10 @@ TRAIN_END_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --market)
+      MARKETS+=("$2")
+      shift 2
+      ;;
     --skip-daily)
       RUN_DAILY=false
       shift
@@ -102,16 +114,18 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      sed -n '2,14p' "$0" | sed 's/^# \?//'
+      sed -n '2,15p' "$0" | sed 's/^# \?//'
+      echo ""
+      echo "Markets (default: all three): pitcher_strikeouts, pitcher_walks, pitcher_outs"
       echo ""
       echo "Steps (default: all enabled):"
-      echo "  1. ./run_daily.sh [--skip-props ...]  → ensure features + predict (logs pitcher_outs)"
-      echo "  2. scripts/log_outcomes.py          → join actual outs to predictions log"
-      echo "  3. scripts/retrain_market.py          → retrain pitcher_outs classifier"
+      echo "  1. ./run_daily.sh [--skip-props ...]  → ensure features + predict (logs count markets)"
+      echo "  2. scripts/log_outcomes.py (per market) → join actuals to predictions log"
+      echo "  3. scripts/retrain_market.py (per market) → retrain classifier"
       echo "  4. predict.py                         → refresh predictions CSV for the board"
       echo ""
-      echo "Optional: --fit-distributional runs fit_distributional.py --market pitcher_outs after step 3."
-      echo "Board: Pred # and Dist Over % populate for outs rows when dist model exists."
+      echo "Optional: --fit-distributional runs fit_distributional.py after each retrain."
+      echo "Board: Pred # and Dist Over % populate when dist models exist."
       exit 0
       ;;
     *)
@@ -122,6 +136,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ ${#MARKETS[@]} -eq 0 ]]; then
+  MARKETS=("${DEFAULT_MARKETS[@]}")
+fi
+
 JOIN_START="${JOIN_START:-$SEASON_START}"
 JOIN_END="${JOIN_END:-$YESTERDAY}"
 TRAIN_START="${TRAIN_START_OVERRIDE:-$TRAIN_START}"
@@ -129,15 +147,16 @@ TRAIN_END="${TRAIN_END_OVERRIDE:-$TRAIN_END}"
 
 echo ""
 echo "========================================================================"
-echo "PITCHER OUTS LEARNING LOOP"
+echo "PITCHER COUNT-MARKET LEARNING LOOP"
 echo "========================================================================"
+echo "Markets:                 ${MARKETS[*]}"
 echo "Season features through: $YESTERDAY"
 echo "Outcome join window:     $JOIN_START → $JOIN_END"
 echo "Retrain window:          $TRAIN_START → $TRAIN_END ($VERSION)"
 echo ""
 
 if [[ "$RUN_DAILY" == true ]]; then
-  echo ">>> Step 1/4 — daily pipeline (predict + auto-log pitcher_outs)"
+  echo ">>> Step 1/4 — daily pipeline (predict + auto-log count markets)"
   DAILY_ARGS=()
   [[ "$SKIP_PROPS" == true ]] && DAILY_ARGS+=(--skip-props)
   [[ "$SKIP_GAME_LINES" == true ]] && DAILY_ARGS+=(--skip-game-lines)
@@ -148,38 +167,43 @@ if [[ "$RUN_DAILY" == true ]]; then
 fi
 
 if [[ "$RUN_JOIN" == true ]]; then
-  echo ">>> Step 2/4 — join post-game outs to predictions log"
-  python scripts/log_outcomes.py \
-    --market pitcher_outs \
-    --start "$JOIN_START" \
-    --end "$JOIN_END" \
-    --version "$VERSION"
+  echo ">>> Step 2/4 — join post-game actuals to predictions log"
+  for market in "${MARKETS[@]}"; do
+    echo "    — $market"
+    python scripts/log_outcomes.py \
+      --market "$market" \
+      --start "$JOIN_START" \
+      --end "$JOIN_END" \
+      --version "$VERSION"
+  done
   echo ""
 fi
 
 if [[ "$RUN_RETRAIN" == true ]]; then
-  echo ">>> Step 3/4 — retrain pitcher_outs classifier"
-  python scripts/retrain_market.py \
-    --market pitcher_outs \
-    --start "$TRAIN_START" \
-    --end "$TRAIN_END" \
-    --version "$VERSION"
-  if [[ "$FIT_DIST" == true ]]; then
-    echo ""
-    echo ">>> Step 3b — fit Poisson regressor (dual-head Pred # / Dist Over %)"
-    python scripts/fit_distributional.py \
+  echo ">>> Step 3/4 — retrain classifiers"
+  for market in "${MARKETS[@]}"; do
+    echo "    — $market"
+    python scripts/retrain_market.py \
+      --market "$market" \
       --start "$TRAIN_START" \
       --end "$TRAIN_END" \
-      --version "$VERSION" \
-      --market pitcher_outs
-  fi
+      --version "$VERSION"
+    if [[ "$FIT_DIST" == true ]]; then
+      echo "    — fit Poisson regressor ($market)"
+      python scripts/fit_distributional.py \
+        --start "$TRAIN_START" \
+        --end "$TRAIN_END" \
+        --version "$VERSION" \
+        --market "$market"
+    fi
+  done
   echo ""
 fi
 
 if [[ "$RUN_REPREDICT" == true ]]; then
-  echo ">>> Step 4/4 — re-predict (board picks up new outs model"
+  echo ">>> Step 4/4 — re-predict (board picks up new count-market models"
   if [[ "$FIT_DIST" == true ]]; then
-    echo "    and distributional Pred # / Dist Over % when model exists)"
+    echo "    and distributional Pred # / Dist Over % when models exist)"
   else
     echo "    probabilities; run with --fit-distributional for Pred # columns)"
   fi
@@ -195,5 +219,5 @@ if [[ "$RUN_STREAMLIT" == true && "$RUN_DAILY" == false ]]; then
   streamlit run app.py --server.port "$STREAMLIT_PORT"
 fi
 
-echo "Done. Filter the main board to Pitcher Outs to inspect changes."
+echo "Done. Filter the main board to Pitcher K / Walks / Outs to inspect changes."
 echo "Learning logs: data/learning/predictions_log.parquet, outcomes_log.parquet"

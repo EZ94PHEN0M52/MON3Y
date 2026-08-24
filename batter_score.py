@@ -261,6 +261,9 @@ class BatterInputs:
     season_avg_raw_points: float          # full-season per-game avg of H+TB+BB
     game_log: List[GameLine]              # most recent games, chronological desc
     opponent_pitcher_arsenal: List[PitchTypeMatchup] = field(default_factory=list)
+    opponent_pitcher_arsenal_v2: List[PitchTypeMatchup] = field(
+        default_factory=list,
+    )
     opponent_pitcher_era_l5: Optional[float] = None
     opposing_sp_name: Optional[str] = None
     h2h_pa: Optional[int] = None

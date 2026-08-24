@@ -291,6 +291,52 @@ def test_build_opponent_pitcher_arsenal_synthetic():
     assert abs(sum(item.usage_pct for item in arsenal) - 1.0) < 0.02
 
 
+def test_build_opponent_pitcher_arsenal_detailed_synthetic():
+    from pitch_matchup import (
+        build_opponent_pitcher_arsenal,
+        build_opponent_pitcher_arsenal_detailed,
+    )
+
+    statcast = pd.DataFrame(
+        {
+            "batter": [1, 1, 1, 1, 1, 1],
+            "pitcher": [9, 9, 9, 9, 9, 9],
+            "pitch_type": ["FF", "FF", "SI", "SL", "ST", "CH"],
+            "pitch_name": [
+                "4-Seam Fastball",
+                "4-Seam Fastball",
+                "Sinker",
+                "Slider",
+                "Sweeper",
+                "Changeup",
+            ],
+            "type": ["X", "X", "X", "X", "X", "X"],
+            "events": [
+                "single",
+                "field_out",
+                "single",
+                "field_out",
+                "single",
+                "field_out",
+            ],
+            "woba_value": [0.40, 0.10, 0.35, 0.05, 0.32, 0.08],
+            "game_date": ["2026-08-01"] * 6,
+        }
+    )
+
+    bucket_arsenal = build_opponent_pitcher_arsenal(statcast, batter_id=1, pitcher_id=9)
+    detailed = build_opponent_pitcher_arsenal_detailed(
+        statcast,
+        batter_id=1,
+        pitcher_id=9,
+    )
+
+    assert len(detailed) >= len(bucket_arsenal)
+    assert any(item.pitch_type == "Sinker" for item in detailed)
+    assert any(item.pitch_type == "Sweeper" for item in detailed)
+    assert abs(sum(item.usage_pct for item in detailed) - 1.0) < 0.02
+
+
 def test_compute_batter_score_phase_d():
     from batter_score import PitchTypeMatchup, compute_batter_score_phase_d
 
@@ -747,6 +793,148 @@ def test_build_top_batter_score_df_ranks_unique_players():
     assert top.iloc[0]["l5_l10_pct"] == "70% / 60%"
 
 
+def test_style_batter_score_board_highlights_combo_row():
+    from ui.batter_score_board import (
+        STYLE_FANTASY_EQUAL,
+        STYLE_FANTASY_LOWER,
+        STYLE_L5_L10_GREEN,
+        STYLE_L5_L10_YELLOW,
+        STYLE_ROW_HIGHLIGHT,
+        STYLE_VS_PITCHER_AVG,
+        style_batter_score_board,
+    )
+
+    combo = pd.DataFrame(
+        [
+            {
+                "player_link": "/player#Combo",
+                "pp_fantasy_line": "5",
+                "ud_fantasy_line": "4.5",
+                "l5_l10_pct": "85% / 90%",
+                "_pp_line": 5.0,
+                "_ud_line": 4.5,
+                "_l5_pct": 0.85,
+                "_l10_pct": 0.90,
+            }
+        ]
+    )
+    combo_html = style_batter_score_board(combo).to_html()
+    assert STYLE_FANTASY_LOWER in combo_html
+    assert STYLE_L5_L10_GREEN in combo_html
+    assert STYLE_ROW_HIGHLIGHT in combo_html
+
+    equal = pd.DataFrame(
+        [
+            {
+                "player_link": "/player#Equal",
+                "pp_fantasy_line": "5",
+                "ud_fantasy_line": "5",
+                "l5_l10_pct": "85% / 70%",
+                "_pp_line": 5.0,
+                "_ud_line": 5.0,
+                "_l5_pct": 0.85,
+                "_l10_pct": 0.70,
+            }
+        ]
+    )
+    equal_html = style_batter_score_board(equal).to_html()
+    assert STYLE_FANTASY_EQUAL in equal_html
+    assert STYLE_L5_L10_YELLOW in equal_html
+    assert STYLE_FANTASY_LOWER not in equal_html
+    assert STYLE_ROW_HIGHLIGHT not in equal_html
+
+    pp_lower = pd.DataFrame(
+        [
+            {
+                "player_link": "/player#PPLower",
+                "pp_fantasy_line": "4.5",
+                "ud_fantasy_line": "5",
+                "l5_l10_pct": "70% / 60%",
+                "_pp_line": 4.5,
+                "_ud_line": 5.0,
+                "_l5_pct": 0.70,
+                "_l10_pct": 0.60,
+            }
+        ]
+    )
+    pp_lower_html = style_batter_score_board(pp_lower).to_html()
+    assert STYLE_FANTASY_LOWER in pp_lower_html
+    assert STYLE_FANTASY_EQUAL not in pp_lower_html
+    assert STYLE_ROW_HIGHLIGHT not in pp_lower_html
+
+    hot_h2h = pd.DataFrame(
+        [
+            {
+                "player_link": "/player#HotH2H",
+                "vs_pitcher": "4/10 .400",
+                "pp_fantasy_line": "5",
+                "ud_fantasy_line": "5",
+                "l5_l10_pct": "50% / 40%",
+                "_pp_line": 5.0,
+                "_ud_line": 5.0,
+                "_l5_pct": 0.50,
+                "_l10_pct": 0.40,
+            }
+        ]
+    )
+    hot_h2h_html = style_batter_score_board(hot_h2h).to_html()
+    assert STYLE_VS_PITCHER_AVG in hot_h2h_html
+
+    era_fallback = pd.DataFrame(
+        [
+            {
+                "player_link": "/player#ERA",
+                "vs_pitcher": "SP ERA L5 2.75",
+                "pp_fantasy_line": "5",
+                "ud_fantasy_line": "5",
+                "l5_l10_pct": "50% / 40%",
+                "_pp_line": 5.0,
+                "_ud_line": 5.0,
+                "_l5_pct": 0.50,
+                "_l10_pct": 0.40,
+            }
+        ]
+    )
+    era_html = style_batter_score_board(era_fallback).to_html()
+    assert STYLE_VS_PITCHER_AVG not in era_html
+
+
+def test_batter_score_pick_card_highlights():
+    from ui.batter_score_highlights import (
+        STYLE_FANTASY_LOWER,
+        STYLE_L5_L10_GREEN,
+        STYLE_VS_PITCHER_AVG,
+        format_batter_score_pick_details_html,
+    )
+    from ui.pick_builder import batter_score_row_to_pick
+
+    row = pd.Series(
+        {
+            "player": "Hot Bat",
+            "_game": "NYY @ BOS",
+            "game_time": "7:05 PM ET",
+            "opposing_sp": "Starter",
+            "vs_pitcher": "4/10 .400",
+            "pp_fantasy_line": "5",
+            "ud_fantasy_line": "4.5",
+            "l5_l10_pct": "85% / 90%",
+            "_pp_line": 5.0,
+            "_ud_line": 4.5,
+            "_l5_pct": 0.85,
+            "_l10_pct": 0.90,
+            "batter_score_display": "88.5",
+            "_batter_score": 88.5,
+        }
+    )
+    pick = batter_score_row_to_pick(row)
+    html = format_batter_score_pick_details_html(pick)
+
+    assert STYLE_FANTASY_LOWER in html
+    assert STYLE_L5_L10_GREEN in html
+    assert STYLE_VS_PITCHER_AVG in html
+    assert "4/10 .400" in html
+
+
 if __name__ == "__main__":
     test_renormalize_phase_a_weights()
     test_renormalize_phase_b_weights()
@@ -762,6 +950,7 @@ if __name__ == "__main__":
     test_dedupe_best_prop_one_row_per_player_market()
     test_pitch_code_to_bucket()
     test_build_opponent_pitcher_arsenal_synthetic()
+    test_build_opponent_pitcher_arsenal_detailed_synthetic()
     test_compute_batter_score_phase_d()
     test_canonical_odds_team_key_sp_lookup_with_abbr()
     test_lookup_opposing_sp_accepts_adjacent_schedule_date()
@@ -779,4 +968,6 @@ if __name__ == "__main__":
     test_build_all_batter_score_df_includes_all_players()
     test_build_all_batter_score_df_filters_by_game()
     test_build_top_batter_score_df_ranks_unique_players()
+    test_style_batter_score_board_highlights_combo_row()
+    test_batter_score_pick_card_highlights()
     print("All batter score tests passed.")

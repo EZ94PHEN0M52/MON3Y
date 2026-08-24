@@ -379,9 +379,12 @@ def generate_predictions(
         )
 
         if appended:
+            from learning_log import LEARNING_MARKETS_ORDERED
+
+            markets_label = ", ".join(LEARNING_MARKETS_ORDERED)
             print(
-                f"Learning log: appended {appended:,} "
-                "pitcher_outs rows to data/learning/predictions_log.parquet"
+                f"Learning log: appended {appended:,} rows "
+                f"({markets_label}) to data/learning/predictions_log.parquet"
             )
     except Exception as exc:
         print(

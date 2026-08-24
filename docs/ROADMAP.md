@@ -96,25 +96,25 @@ Optional per-row detail: `--write-detail` → `batter_score_validation_detail.pa
 
 ---
 
-## Track 1 — Pitcher outs learning loop ✅ v1 shipped
+## Track 1 — Pitcher count-market learning loop ✅ v1 shipped
 
-Self-learning for **`pitcher_outs` only** — log predictions, join outcomes, single-market retrain. Full docs: [README → Pitcher outs learning loop](../README.md#pitcher-outs-learning-loop-track-1).
+Self-learning for **`pitcher_strikeouts`**, **`pitcher_walks`**, and **`pitcher_outs`** — log predictions, join outcomes, single-market retrain. Full docs: [README → Pitcher count-market learning loop](../README.md#pitcher-outs-learning-loop-track-1).
 
 | Component | Path | Status |
 |-----------|------|--------|
-| Prediction logging | `learning_log.py` + `predict.py` hook | **Done** |
+| Prediction logging | `learning_log.py` + `predict.py` hook | **Done** (all three count markets) |
 | Outcome join | `scripts/log_outcomes.py` | **Done** |
-| Single-market retrain | `scripts/retrain_market.py` | **Done** |
-| Orchestration script | `run_pitcher_outs_learning.sh` | **Done** |
-| Poisson dual-head for outs | `distributional.py` + `--fit-distributional` | **Done** |
+| Single-market retrain | `scripts/retrain_market.py` | **Done** (K / walks / outs) |
+| Orchestration script | `run_pitcher_outs_learning.sh` | **Done** (loops all three by default) |
+| Poisson dual-head | `distributional.py` + `--fit-distributional` | **Done** |
 
 **Board impact:**
 
 | Action | UI change |
 |--------|-----------|
 | Log / join only | None |
-| Retrain classifier + re-predict | Pitcher Outs Over % / Edge / EV may change |
-| `--fit-distributional` | **Pred #** and **Dist Over %** populate for outs (existing columns) |
+| Retrain classifier + re-predict | Pitcher K / Walks / Outs Over % / Edge / EV may change |
+| `--fit-distributional` | **Pred #** and **Dist Over %** populate for those markets (existing columns) |
 
 **Deferred (Track 1 Phase 2):**
 

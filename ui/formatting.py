@@ -58,6 +58,15 @@ def format_commence_time(value):
         return str(value)
 
 
+def format_game_time(game, commence_time=None) -> str:
+    """Matchup plus Eastern start time, e.g. ``Away @ Home · Aug 23, 1:05 PM ET``."""
+    game_text = str(game or "").strip()
+    time_str = format_commence_time(commence_time)
+    if game_text and time_str != "—":
+        return f"{game_text} · {time_str}"
+    return game_text or time_str
+
+
 def enrich_with_over_under_probs(df):
     """
     Ensure over_probability and under_probability exist on prediction rows.
@@ -136,18 +145,37 @@ def prepare_display_df(df):
     return display
 
 
-def player_path(player_name):
+def player_path(player_name, hand=None):
     from urllib.parse import urlencode
 
     # Fragment is ignored by the server but lets LinkColumn show the name via
     # display_text=r"#(.*)$" (LinkColumn cannot read another dataframe column).
-    return "/?" + urlencode({"player": player_name}) + f"#{player_name}"
+    display_name = format_name_with_hand(player_name, hand)
+    return "/?" + urlencode({"player": player_name}) + f"#{display_name}"
+
+
+def format_name_with_hand(name, hand=None) -> str:
+    """Append (L) or (R) when *hand* is known."""
+    text = str(name).strip()
+    if not text:
+        return text
+
+    if hand in ("L", "R"):
+        return f"{text} ({hand})"
+
+    return text
 
 
 def top_list_path(view):
     from urllib.parse import urlencode
 
     return "/?" + urlencode({"view": view})
+
+
+def hitters_life_path():
+    from urllib.parse import urlencode
+
+    return "/?" + urlencode({"view": "hitters_life"})
 
 
 def compare_view_path():

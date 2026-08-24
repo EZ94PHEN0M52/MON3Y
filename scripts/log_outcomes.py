@@ -83,7 +83,8 @@ def main() -> None:
         if preds.empty:
             print(
                 "No outcomes joined — predictions_log is empty. "
-                "Run predict.py first (logging is automatic for pitcher_outs)."
+                "Run predict.py first (logging is automatic for Track 1 "
+                "count markets: strikeouts, walks, outs)."
             )
         else:
             pred_dates = sorted(

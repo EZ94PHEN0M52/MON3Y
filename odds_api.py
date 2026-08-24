@@ -272,8 +272,9 @@ def get_event_props(
     )
 
 
-def _get_event_prizepicks(
+def _get_event_dfs(
     event_id,
+    bookmaker: str,
     markets,
 ):
     url = (
@@ -285,7 +286,7 @@ def _get_event_prizepicks(
     params = {
         "apiKey": ODDS_API_KEY,
         "regions": "us_dfs",
-        "bookmakers": "prizepicks",
+        "bookmakers": bookmaker,
         "markets": ",".join(markets),
         "oddsFormat": "american",
     }
@@ -293,6 +294,17 @@ def _get_event_prizepicks(
     return odds_request(
         url,
         params,
+    )
+
+
+def _get_event_prizepicks(
+    event_id,
+    markets,
+):
+    return _get_event_dfs(
+        event_id,
+        "prizepicks",
+        markets,
     )
 
 
@@ -320,6 +332,21 @@ def get_event_prizepicks_fantasy(
 
     return _get_event_prizepicks(
         event_id,
+        markets,
+    )
+
+
+def get_event_underdog_fantasy(
+    event_id,
+    markets=None,
+):
+    """Underdog Fantasy batter score lines (Odds API us_dfs region)."""
+    if markets is None:
+        markets = PRIZEPICKS_FANTASY_MARKETS
+
+    return _get_event_dfs(
+        event_id,
+        "underdog",
         markets,
     )
 

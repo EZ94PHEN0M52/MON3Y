@@ -70,6 +70,52 @@ DEFAULT_AVG = 0.250
 
 SP_ARSENAL_LAST_N_STARTS = 5
 
+# Statcast pitch_type → Baseball Savant display name (fallback when pitch_name absent).
+PITCH_CODE_TO_SAVANT_NAME = {
+    "FF": "4-Seam Fastball",
+    "FT": "2-Seam Fastball",
+    "SI": "Sinker",
+    "FC": "Cutter",
+    "FS": "Split-Finger",
+    "FO": "Forkball",
+    "FA": "Fastball",
+    "SL": "Slider",
+    "ST": "Sweeper",
+    "SV": "Slurve",
+    "CU": "Curveball",
+    "KC": "Knuckle Curve",
+    "CS": "Slow Curve",
+    "CH": "Changeup",
+    "SC": "Screwball",
+    "EP": "Eephus",
+    "KN": "Knuckleball",
+    "PO": "Pitch Out",
+    "UN": "Unknown",
+}
+
+
+def pitch_code_to_savant_name(code, pitch_rows: pd.DataFrame | None = None) -> str:
+    """Resolve Savant-style pitch label from Statcast rows or the code map."""
+    if code is None or (isinstance(code, float) and np.isnan(code)):
+        return PITCH_CODE_TO_SAVANT_NAME.get("UN", "Unknown")
+
+    code_str = str(code).strip().upper()
+    if not code_str:
+        return PITCH_CODE_TO_SAVANT_NAME.get("UN", "Unknown")
+
+    if pitch_rows is not None and "pitch_name" in pitch_rows.columns:
+        names = (
+            pitch_rows["pitch_name"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        names = names[names.ne("")]
+        if not names.empty:
+            return str(names.value_counts().index[0])
+
+    return PITCH_CODE_TO_SAVANT_NAME.get(code_str, code_str)
+
 
 def pitch_code_to_bucket(code) -> str:
     if code is None or (isinstance(code, float) and np.isnan(code)):
@@ -163,6 +209,78 @@ def aggregate_batter_pitch_stats(
     return stats
 
 
+def _add_pitch_savant_name(df: pd.DataFrame) -> pd.DataFrame:
+    result = df.copy()
+    if "pitch_type" not in result.columns:
+        result["pitch_savant_name"] = PITCH_CODE_TO_SAVANT_NAME.get("UN", "Unknown")
+        return result
+
+    codes = result["pitch_type"].astype(str).str.strip().str.upper()
+    result["pitch_savant_name"] = codes.map(
+        lambda code: PITCH_CODE_TO_SAVANT_NAME.get(code, code),
+    )
+
+    if "pitch_name" in result.columns:
+        named = result["pitch_name"].astype(str).str.strip()
+        has_name = result["pitch_name"].notna() & named.ne("")
+        result.loc[has_name, "pitch_savant_name"] = named[has_name]
+
+    return result
+
+
+def aggregate_batter_pitch_stats_detailed(
+    statcast: pd.DataFrame,
+    batter_id: int,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Batter wOBA and AVG by Savant pitch type (not five-bucket rollup).
+    """
+    if statcast is None or statcast.empty or batter_id is None:
+        return {}
+
+    required = {"batter", "pitch_type"}
+    if not required.issubset(statcast.columns):
+        return {}
+
+    batter_rows = statcast[
+        statcast["batter"].astype(int).eq(int(batter_id))
+    ].copy()
+
+    if batter_rows.empty:
+        return {}
+
+    batter_rows = _add_pitch_savant_name(batter_rows)
+    in_play = _in_play_mask(batter_rows)
+    contact = batter_rows[in_play].copy()
+
+    if contact.empty:
+        return {}
+
+    stats: Dict[str, Dict[str, float]] = {}
+
+    for label, label_rows in contact.groupby("pitch_savant_name", sort=False):
+        label_stats = {"woba": DEFAULT_WOBA, "avg": DEFAULT_AVG}
+
+        if "woba_value" in label_rows.columns:
+            woba_series = pd.to_numeric(
+                label_rows["woba_value"],
+                errors="coerce",
+            ).dropna()
+            if not woba_series.empty:
+                label_stats["woba"] = float(woba_series.mean())
+
+        if "events" in label_rows.columns:
+            events = label_rows["events"].dropna()
+            ab_count = int(events.isin(AB_EVENTS).sum())
+            hit_count = int(events.isin(HITS).sum())
+            if ab_count > 0:
+                label_stats["avg"] = hit_count / ab_count
+
+        stats[str(label)] = label_stats
+
+    return stats
+
+
 def _pitcher_recent_game_dates(
     statcast: pd.DataFrame,
     pitcher_id: int,
@@ -231,6 +349,136 @@ def aggregate_pitcher_arsenal_usage(
         for bucket in PITCH_BUCKETS
         if counts.get(bucket, 0.0) > 0
     }
+
+
+def aggregate_pitcher_arsenal_usage_detailed(
+    statcast: pd.DataFrame,
+    pitcher_id: int,
+    *,
+    last_n_starts: int = SP_ARSENAL_LAST_N_STARTS,
+) -> Dict[str, float]:
+    """
+    Opposing SP pitch usage by Savant pitch type (last N starts).
+
+    Unlike ``aggregate_pitcher_arsenal_usage``, this keeps individual pitch
+    types (4-Seam Fastball, Sinker, Sweeper, etc.) instead of five buckets.
+    """
+    pitcher_id = coerce_mlb_id(pitcher_id)
+    if statcast is None or statcast.empty or pitcher_id is None:
+        return {}
+
+    required = {"pitcher", "pitch_type"}
+    if not required.issubset(statcast.columns):
+        return {}
+
+    pitcher_rows = statcast[
+        statcast["pitcher"].astype(int).eq(pitcher_id)
+    ].copy()
+
+    if pitcher_rows.empty:
+        return {}
+
+    if "game_date" in pitcher_rows.columns and last_n_starts > 0:
+        recent_dates = _pitcher_recent_game_dates(
+            statcast,
+            pitcher_id,
+            last_n_starts,
+        )
+        if recent_dates:
+            pitcher_rows = pitcher_rows[
+                pitcher_rows["game_date"].isin(recent_dates)
+            ]
+
+    if pitcher_rows.empty:
+        return {}
+
+    usage_by_name: Dict[str, float] = {}
+    code_counts = pitcher_rows["pitch_type"].value_counts(normalize=True)
+
+    for code, pct in code_counts.items():
+        if pd.isna(code) or pct <= 0:
+            continue
+
+        code_str = str(code).strip().upper()
+        code_rows = pitcher_rows[
+            pitcher_rows["pitch_type"]
+            .astype(str)
+            .str.upper()
+            .eq(code_str)
+        ]
+        name = pitch_code_to_savant_name(code_str, code_rows)
+        usage_by_name[name] = usage_by_name.get(name, 0.0) + float(pct)
+
+    return usage_by_name
+
+
+def build_opponent_pitcher_arsenal_detailed(
+    statcast: pd.DataFrame,
+    batter_id: Optional[int],
+    pitcher_id: Optional[int],
+) -> List[PitchTypeMatchup]:
+    """
+    Usage-weighted Savant pitch types for Batter Score v2 matchup grade.
+
+    Keeps individual pitch types (4-Seam Fastball, Sinker, Sweeper, etc.)
+    instead of the five-bucket Phase D rollup.
+    """
+    if statcast is None or statcast.empty or pitcher_id is None:
+        return []
+
+    pitcher_id = coerce_mlb_id(pitcher_id)
+    if pitcher_id is None:
+        return []
+
+    usage = aggregate_pitcher_arsenal_usage_detailed(
+        statcast,
+        pitcher_id,
+    )
+    if not usage:
+        return []
+
+    batter_stats = aggregate_batter_pitch_stats_detailed(
+        statcast,
+        batter_id,
+    )
+
+    overall_woba = DEFAULT_WOBA
+    overall_avg = DEFAULT_AVG
+    if batter_stats:
+        overall_woba = float(np.mean([row["woba"] for row in batter_stats.values()]))
+        overall_avg = float(np.mean([row["avg"] for row in batter_stats.values()]))
+
+    arsenal: List[PitchTypeMatchup] = []
+    for pitch_name, usage_pct in usage.items():
+        pitch_stats = batter_stats.get(pitch_name, {})
+        batter_woba = pitch_stats.get("woba", overall_woba)
+        batter_avg = pitch_stats.get("avg", overall_avg)
+
+        arsenal.append(
+            PitchTypeMatchup(
+                pitch_type=pitch_name,
+                usage_pct=usage_pct,
+                batter_woba=batter_woba,
+                batter_avg=batter_avg,
+            )
+        )
+
+    usage_total = sum(item.usage_pct for item in arsenal)
+    if usage_total <= 0:
+        return []
+
+    if abs(usage_total - 1.0) > 0.01:
+        arsenal = [
+            PitchTypeMatchup(
+                pitch_type=item.pitch_type,
+                usage_pct=item.usage_pct / usage_total,
+                batter_woba=item.batter_woba,
+                batter_avg=item.batter_avg,
+            )
+            for item in arsenal
+        ]
+
+    return arsenal
 
 
 def build_opponent_pitcher_arsenal(

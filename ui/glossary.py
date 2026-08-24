@@ -249,6 +249,13 @@ GLOSSARY = {
         "**Partial** when matchup or SP data is missing. Orthogonal to "
         "LightGBM prop probabilities."
     ),
+    "batter_score_v2": (
+        "Same composite as Batter Score, but the **matchup grade** uses "
+        "individual Baseball Savant pitch types (4-Seam Fastball, Sinker, "
+        "Sweeper, etc.) instead of five buckets. Season, form, and pitcher "
+        "components are unchanged. Active when the opposing SP and detailed "
+        "Statcast arsenal are available; otherwise matches the Partial path."
+    ),
     "batter_score_season_baseline": (
         "Full-season per-game average of hits + total bases + walks (H+TB+BB), "
         "scaled to a 0–100 index (6.0 raw points = 100)."
@@ -292,6 +299,11 @@ GLOSSARY = {
         "PrizePicks posted Over fantasy score line for this hitter (from the "
         "daily us_dfs fetch). Used as the threshold for the L5 / L10 % column."
     ),
+    "ud_fantasy_line": (
+        "Underdog Fantasy posted Over fantasy-point line for this hitter "
+        "(from Underdog's pick'em API — not available via Odds API). "
+        "Display only — L5 / L10 % still uses the PrizePicks line when available."
+    ),
     "filter_batter_score": (
         "Show props where Batter Score is at least this value (0–100)."
     ),
@@ -319,6 +331,28 @@ GLOSSARY = {
         "Select one or more rows from the **currently filtered table** below "
         "the board, then **Add selected**. **Add top EV** adds the highest-EV "
         "row in view. Duplicates are skipped automatically."
+    ),
+    "batter_score_pick_builder": (
+        "**Batter Score Pick Builder** is a separate session favorites slip for "
+        "batters on the **Batter score by game** board (all games or one "
+        "matchup). It does not mix with prop Pick Builder picks.\n\n"
+        "Picks persist for this browser session only. The same batter cannot "
+        "be added twice for the same game (player + matchup). Each card shows "
+        "Batter Score, game/time, opposing SP, vs-pitcher line, PP/UD fantasy, "
+        "and L5/L10 % — frozen at add time."
+    ),
+    "batter_score_pick_builder_add": (
+        "Select batters from the **currently filtered Batter score by game** "
+        "table (respects the Game dropdown), then **Add selected**. "
+        "**Add top batter score** adds the highest Batter Score row in view. "
+        "Duplicates are skipped automatically."
+    ),
+    "hitters_life_lineup_filter": (
+        "**Rotowire lineup filter** orders batters using each team's default "
+        "lineup vs the opposing starter's hand (Default vs. RHP / vs. LHP on "
+        "Rotowire). Away batters follow the away lineup vs the home SP; home "
+        "batters follow the home lineup vs the away SP. Only batters on "
+        "today's prop slate are shown."
     ),
 }
 

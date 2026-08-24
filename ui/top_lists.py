@@ -14,7 +14,7 @@ from ui.glossary import EDGE_CALLOUT, GLOSSARY
 from ui.player import render_back_to_board
 
 
-def _render_ranked_table(filtered, sort_col, key_prefix):
+def _render_ranked_table(filtered, sort_col, key_prefix, version="v2"):
     if filtered.empty:
         st.info("No props meet the current filters.")
         return
@@ -33,7 +33,7 @@ def _render_ranked_table(filtered, sort_col, key_prefix):
         sort_col,
         ascending=False,
     ).reset_index(drop=True)
-    display = _prepare_board_table_df(ranked)[RANKING_TABLE_COLUMNS]
+    display = _prepare_board_table_df(ranked, version=version)[RANKING_TABLE_COLUMNS]
 
     st.caption(
         f"Showing **{len(ranked)}** props ranked by "
@@ -61,6 +61,7 @@ def render_top_over_page(df, version):
         filtered,
         "over_probability",
         key_prefix=f"top_over_{version}",
+        version=version,
     )
 
     st.divider()
@@ -85,6 +86,7 @@ def render_top_under_page(df, version):
         filtered,
         "under_probability",
         key_prefix=f"top_under_{version}",
+        version=version,
     )
 
     st.divider()

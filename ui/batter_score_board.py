@@ -1,5 +1,6 @@
 """Top Batter Score section for the main prop board."""
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -7,27 +8,169 @@ from batter_score_data import (
     build_game_context,
     is_batter_score_validated,
     lookup_batter_score,
+    lookup_batter_score_v2,
     lookup_h2h_board_stats,
 )
 from ui.batter_score import format_batter_score_display
-from ui.formatting import format_commence_time, player_path
+from ui.batter_score_highlights import (
+    HIT_RATE_THRESHOLD,
+    STYLE_FANTASY_EQUAL,
+    STYLE_FANTASY_LOWER,
+    STYLE_L5_L10_GREEN,
+    STYLE_L5_L10_YELLOW,
+    STYLE_ROW_HIGHLIGHT,
+    STYLE_VS_PITCHER_AVG,
+    fantasy_cell_styles,
+    join_styles,
+    l5_l10_style,
+    vs_pitcher_style,
+)
+from ui.pick_builder import render_batter_score_add_controls
+from ui.formatting import format_game_time, format_name_with_hand, player_path
 from ui.glossary import GLOSSARY
 from ui.player_stats import (
     BATTER_MARKETS,
-    batter_score_l5_l10_pct,
+    _format_l5_l10_pct,
     format_prizepicks_fantasy_line,
+    format_underdog_fantasy_line,
+    lookup_batter_hand,
+    lookup_pitcher_hand,
+    lookup_prizepicks_fantasy_line,
+    lookup_underdog_fantasy_line,
+    rolling_pp_fantasy_over_rates,
 )
 
 # Board "Vs pitcher" column — lower bar than MIN_PA_H2H (10) used in scoring.
 MIN_PA_H2H_BOARD = 3
 
 
+def _resolve_l5_l10_pct(row, version: str, *, pp_line=None) -> tuple[str, float, float]:
+    """Display text plus raw L5/L10 over-rates (0–1) for styling."""
+    if pp_line is None:
+        pp_line = lookup_prizepicks_fantasy_line(row["player"])
+    if pp_line is not None:
+        l5_pct, l10_pct = rolling_pp_fantasy_over_rates(
+            row["player"],
+            pp_line,
+            version=version,
+        )
+        return _format_l5_l10_pct(l5_pct, l10_pct), l5_pct, l10_pct
+
+    l5_pct = pd.to_numeric(row.get("l5_pct"), errors="coerce")
+    l10_pct = pd.to_numeric(row.get("l10_pct"), errors="coerce")
+    fallback = row.get("l5_l10_pct")
+    if pd.isna(l5_pct) and pd.isna(l10_pct):
+        if fallback is None or (isinstance(fallback, float) and pd.isna(fallback)):
+            return "—", np.nan, np.nan
+        return fallback, np.nan, np.nan
+
+    return _format_l5_l10_pct(l5_pct, l10_pct), l5_pct, l10_pct
+
+
+def style_batter_score_board(full_df: pd.DataFrame):
+    """Color PP/UD fantasy, Vs pitcher H2H AVG, L5-L10 cells, and combo rows."""
+    meta_cols = ["_pp_line", "_ud_line", "_l5_pct", "_l10_pct"]
+    if full_df.empty or any(col not in full_df.columns for col in meta_cols):
+        return full_df.drop(
+            columns=[
+                col
+                for col in full_df.columns
+                if col.startswith("_") or col in {"player", "batter_score_label"}
+            ],
+            errors="ignore",
+        )
+
+    display_df = full_df.drop(
+        columns=[
+            col
+            for col in full_df.columns
+            if col.startswith("_") or col in {"player", "batter_score_label"}
+        ],
+        errors="ignore",
+    )
+    meta_df = full_df[meta_cols].reset_index(drop=True)
+    display_df = display_df.reset_index(drop=True)
+    vs_pitcher_cells = (
+        display_df["vs_pitcher"]
+        if "vs_pitcher" in display_df.columns
+        else pd.Series([None] * len(display_df))
+    )
+
+    pp_fantasy_styles = []
+    ud_fantasy_styles = []
+    vs_pitcher_styles = []
+    l5_l10_styles = []
+    row_highlight = []
+
+    for idx, meta in meta_df.iterrows():
+        pp_line = meta["_pp_line"]
+        ud_line = meta["_ud_line"]
+        l5_pct = meta["_l5_pct"]
+        l10_pct = meta["_l10_pct"]
+
+        pp_style, ud_style, ud_is_lower = fantasy_cell_styles(pp_line, ud_line)
+        pp_fantasy_styles.append(pp_style)
+        ud_fantasy_styles.append(ud_style)
+
+        vs_pitcher_styles.append(
+            vs_pitcher_style(vs_pitcher_cells.iloc[idx])
+        )
+
+        l5_l10_styles.append(l5_l10_style(l5_pct, l10_pct))
+
+        l5_hit = not pd.isna(l5_pct) and float(l5_pct) >= HIT_RATE_THRESHOLD
+        l10_hit = not pd.isna(l10_pct) and float(l10_pct) >= HIT_RATE_THRESHOLD
+        row_highlight.append(ud_is_lower and l5_hit and l10_hit)
+
+    def _apply_row_styles(row):
+        idx = row.name
+        styles = [""] * len(row)
+        columns = list(row.index)
+        border = STYLE_ROW_HIGHLIGHT if row_highlight[idx] else ""
+
+        if pp_fantasy_styles[idx] and "pp_fantasy_line" in columns:
+            styles[columns.index("pp_fantasy_line")] = join_styles(
+                pp_fantasy_styles[idx],
+                border,
+            )
+
+        if ud_fantasy_styles[idx] and "ud_fantasy_line" in columns:
+            styles[columns.index("ud_fantasy_line")] = join_styles(
+                ud_fantasy_styles[idx],
+                border,
+            )
+
+        if vs_pitcher_styles[idx] and "vs_pitcher" in columns:
+            styles[columns.index("vs_pitcher")] = vs_pitcher_styles[idx]
+
+        if l5_l10_styles[idx] and "l5_l10_pct" in columns:
+            styles[columns.index("l5_l10_pct")] = join_styles(
+                l5_l10_styles[idx],
+                border,
+            )
+
+        if border:
+            for col_idx, col in enumerate(columns):
+                if styles[col_idx]:
+                    continue
+                styles[col_idx] = border
+
+        return styles
+
+    return display_df.style.apply(_apply_row_styles, axis=1)
+
+
+def _render_batter_score_dataframe(df: pd.DataFrame, *, height: int):
+    st.dataframe(
+        style_batter_score_board(df),
+        hide_index=True,
+        height=height,
+        column_config=_batter_score_table_column_config(),
+    )
+
+
 def _format_game_time(row) -> str:
-    game = row.get("game") or ""
-    time_str = format_commence_time(row.get("commence_time"))
-    if game and time_str != "—":
-        return f"{game} · {time_str}"
-    return game or time_str
+    return format_game_time(row.get("game"), row.get("commence_time"))
 
 
 def _format_batting_avg(hits: int, ab: int) -> str:
@@ -99,6 +242,11 @@ def _build_batter_score_row(row, version: str) -> dict:
         version=version,
         game_context=game_context,
     )
+    result_v2 = lookup_batter_score_v2(
+        row["player"],
+        version=version,
+        game_context=game_context,
+    )
     h2h_pa, h2h_hits, h2h_ab = lookup_h2h_board_stats(
         row["player"],
         version=version,
@@ -107,33 +255,52 @@ def _build_batter_score_row(row, version: str) -> dict:
 
     opposing = "TBD"
     if result and result.opposing_sp_name:
-        opposing = result.opposing_sp_name
+        sp_hand = lookup_pitcher_hand(
+            result.opposing_sp_name,
+            version=version,
+        )
+        opposing = format_name_with_hand(
+            result.opposing_sp_name,
+            sp_hand,
+        )
 
-    l5_l10 = batter_score_l5_l10_pct(
-        row["player"],
-        version=version,
-        fallback=row.get("l5_l10_pct"),
+    pp_line = lookup_prizepicks_fantasy_line(row["player"])
+    ud_line = lookup_underdog_fantasy_line(row["player"])
+    l5_l10, l5_pct, l10_pct = _resolve_l5_l10_pct(row, version, pp_line=pp_line)
+    vs_pitcher = _format_vs_pitcher(
+        result,
+        h2h_pa=h2h_pa,
+        h2h_hits=h2h_hits,
+        h2h_ab=h2h_ab,
     )
-    if pd.isna(l5_l10) or l5_l10 is None:
-        l5_l10 = "—"
 
     return {
-        "player_link": player_path(row["player"]),
+        "player": row["player"],
+        "player_link": player_path(
+            row["player"],
+            hand=lookup_batter_hand(row["player"], version=version),
+        ),
         "game_time": _format_game_time(row),
         "opposing_sp": opposing,
-        "vs_pitcher": _format_vs_pitcher(
-            result,
-            h2h_pa=h2h_pa,
-            h2h_hits=h2h_hits,
-            h2h_ab=h2h_ab,
-        ),
+        "vs_pitcher": vs_pitcher,
         "pp_fantasy_line": format_prizepicks_fantasy_line(row["player"]),
+        "ud_fantasy_line": format_underdog_fantasy_line(row["player"]),
         "l5_l10_pct": l5_l10,
         "batter_score_display": format_batter_score_display(
             row["batter_score"],
             row.get("batter_score_label") or "",
         ),
+        "batter_score_v2_display": format_batter_score_display(
+            result_v2.batter_score if result_v2 else None,
+            (result_v2.partial_label if result_v2 else "") or "",
+        ),
+        "batter_score_label": row.get("batter_score_label") or "",
         "_game": row.get("game") or "",
+        "_batter_score": row["batter_score"],
+        "_pp_line": pp_line,
+        "_ud_line": ud_line,
+        "_l5_pct": l5_pct,
+        "_l10_pct": l10_pct,
     }
 
 
@@ -155,9 +322,17 @@ def render_top_batter_scores(
     caption = (
         "Highest Batter Score among batters on today's slate "
         "(respects Market type filter; independent of Edge / EV filters). "
-        "**PP fantasy** is each hitter's posted PrizePicks fantasy score line. "
-        "L5 / L10 % is the over-rate vs that line when available; otherwise "
+        "**PP fantasy** and **UD fantasy** are each hitter's posted DFS "
+        "fantasy score line (PrizePicks and Underdog). "
+        "L5 / L10 % is the over-rate vs the PP line when available; otherwise "
         "falls back to the market line on that player's top prop row. "
+        "**Orange** PP/UD fantasy = lower posted line between the two books; "
+        "**sky blue** = same line on both; "
+        "**light green** Vs pitcher = career H2H batting average above .300; "
+        "**yellow/green** L5/L10 = L5 ≥ 80% with L10 below/above 80%; "
+        "**red outline** = UD lower + L5/L10 green. "
+        "**Batter score v2** uses Savant pitch-type matchup (Sinker, Sweeper, etc.) "
+        "instead of five pitch buckets. "
     )
     if is_batter_score_validated():
         caption += GLOSSARY["batter_score_validated"]
@@ -169,11 +344,9 @@ def render_top_batter_scores(
         st.caption("No batter scores available for the current slate.")
         return
 
-    st.dataframe(
+    _render_batter_score_dataframe(
         top_df,
-        hide_index=True,
         height=min(42 * len(top_df) + 38, 480),
-        column_config=_batter_score_table_column_config(),
     )
 
 
@@ -181,7 +354,10 @@ def _batter_score_table_column_config():
     return {
         "player_link": st.column_config.LinkColumn(
             "Player",
-            help=GLOSSARY["player_link"],
+            help=(
+                f"{GLOSSARY['player_link']} "
+                "(L) or (R) = bat hand when known from features."
+            ),
             display_text=r"#(.*)$",
         ),
         "game_time": st.column_config.TextColumn(
@@ -190,18 +366,24 @@ def _batter_score_table_column_config():
         ),
         "opposing_sp": st.column_config.TextColumn(
             "Opposing pitcher",
+            help="Probable opposing starter; (L) or (R) = throwing hand when known.",
         ),
         "vs_pitcher": st.column_config.TextColumn(
             "Vs pitcher",
             help=(
                 "Career batting average vs the listed opposing starter "
                 f"(hits/AB) when PA ≥ {MIN_PA_H2H_BOARD}; otherwise SP ERA "
-                "over the pitcher's last five starts."
+                "over the pitcher's last five starts. "
+                "Light green when H2H average is above .300."
             ),
         ),
         "pp_fantasy_line": st.column_config.TextColumn(
             "PP fantasy",
             help=GLOSSARY["pp_fantasy_line"],
+        ),
+        "ud_fantasy_line": st.column_config.TextColumn(
+            "UD fantasy",
+            help=GLOSSARY["ud_fantasy_line"],
         ),
         "l5_l10_pct": st.column_config.TextColumn(
             "L5 / L10 %",
@@ -216,6 +398,10 @@ def _batter_score_table_column_config():
         "batter_score_display": st.column_config.TextColumn(
             "Batter score",
             help=GLOSSARY["batter_score"],
+        ),
+        "batter_score_v2_display": st.column_config.TextColumn(
+            "Batter score v2",
+            help=GLOSSARY["batter_score_v2"],
         ),
     }
 
@@ -290,9 +476,12 @@ def render_game_batter_scores(
     st.markdown("##### Batter score by game")
     caption = (
         "All batters on today's slate (best Batter Score row per player). "
-        "**PP fantasy** is each hitter's posted PrizePicks fantasy score line. "
+        "**PP fantasy** and **UD fantasy** are each hitter's posted DFS "
+        "fantasy score line (PrizePicks and Underdog). "
         "Select a game to narrow the list. Respects Market type filter like "
-        "Top 10; independent of Edge / EV filters."
+        "Top 10; independent of Edge / EV filters. "
+        "Cell colors match Top 10 (orange lower PP/UD, sky blue when equal, light green H2H AVG > .300, yellow/green L5/L10, red outline combo). "
+        "Batter score v2 uses Savant pitch-type matchup."
     )
     if is_batter_score_validated():
         caption += " " + GLOSSARY["batter_score_validated"]
@@ -318,13 +507,11 @@ def render_game_batter_scores(
     if selected_game != "All games":
         display_df = all_df[all_df["_game"] == selected_game]
 
-    display_df = display_df.drop(columns=["_game"], errors="ignore").reset_index(
-        drop=True
-    )
+    display_df = display_df.reset_index(drop=True)
 
-    st.dataframe(
+    render_batter_score_add_controls(display_df, key_prefix)
+
+    _render_batter_score_dataframe(
         display_df,
-        hide_index=True,
         height=min(42 * len(display_df) + 38, 720),
-        column_config=_batter_score_table_column_config(),
     )

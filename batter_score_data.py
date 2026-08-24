@@ -19,6 +19,7 @@ Cache-first policy (no redundant live API calls):
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -41,7 +42,12 @@ from batter_score import (
 )
 from build_features import EXTRA_BASES, HITS
 from fetch_probables import PROBABLES_PATH, lookup_opposing_sp
-from pitch_matchup import AB_EVENTS, arsenal_ready, build_opponent_pitcher_arsenal
+from pitch_matchup import (
+    AB_EVENTS,
+    arsenal_ready,
+    build_opponent_pitcher_arsenal,
+    build_opponent_pitcher_arsenal_detailed,
+)
 from ui.player_stats import (
     _feature_cache_key,
     _fuzzy_player_key,
@@ -434,6 +440,7 @@ def build_batter_inputs_from_rows(
     h2h_ab = None
     team_proxy = None
     opponent_arsenal = []
+    opponent_arsenal_v2 = []
 
     if game_context and isinstance(batter_team, str) and batter_team.strip():
         sp_name, sp_id = _lookup_opposing_sp_for_context(
@@ -459,6 +466,11 @@ def build_batter_inputs_from_rows(
                     batter_id,
                     sp_id,
                 )
+                opponent_arsenal_v2 = build_opponent_pitcher_arsenal_detailed(
+                    statcast,
+                    batter_id,
+                    sp_id,
+                )
         elif USE_TEAM_PITCHING_PROXY:
             team_proxy = _team_opp_earned_runs_proxy(player_rows)
 
@@ -467,6 +479,7 @@ def build_batter_inputs_from_rows(
         season_avg_raw_points=season_avg,
         game_log=game_log,
         opponent_pitcher_arsenal=opponent_arsenal,
+        opponent_pitcher_arsenal_v2=opponent_arsenal_v2,
         opponent_pitcher_era_l5=sp_era_l5,
         opposing_sp_name=sp_name,
         h2h_pa=h2h_pa,
@@ -666,6 +679,69 @@ def score_batter(
         return None
 
 
+def score_batter_v2(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    """
+    Batter Score v2: same composite as Phase D but matchup grade uses Savant
+    pitch types (Sinker, Sweeper, etc.) instead of five buckets.
+    """
+    batter = build_batter_inputs(
+        player_name,
+        version=version,
+        game_context=game_context,
+    )
+    if batter is None:
+        return None
+
+    sp_named = bool(batter.opposing_sp_name and game_context is not None)
+    sp_ready = sp_named and batter.opponent_pitcher_era_l5 is not None
+    matchup_ready_v2 = (
+        sp_ready
+        and arsenal_ready(batter.opponent_pitcher_arsenal_v2)
+    )
+
+    try:
+        if matchup_ready_v2:
+            batter_v2 = replace(
+                batter,
+                opponent_pitcher_arsenal=batter.opponent_pitcher_arsenal_v2,
+            )
+            return compute_batter_score_phase_d(
+                batter_v2,
+                gates=PHASE_D_GATES,
+            )
+
+        if sp_ready:
+            return compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+            )
+
+        if (
+            USE_TEAM_PITCHING_PROXY
+            and batter.team_opp_earned_runs_proxy is not None
+            and game_context is not None
+            and not sp_named
+        ):
+            return compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                sp_tbd=True,
+                team_proxy=True,
+            )
+
+        return compute_batter_score_partial(
+            batter,
+            gates=PHASE_A_GATES,
+            sp_tbd=game_context is not None and not sp_named,
+        )
+    except ValueError:
+        return None
+
+
 def _score_cache_key(
     player_name: str,
     game_context: Optional[dict],
@@ -753,6 +829,48 @@ def lookup_batter_score(
     cache_key = _score_cache_key(player_name, game_context)
 
     return _cached_score(
+        cache_key,
+        player_name,
+        version,
+        context_json,
+    )
+
+
+@lru_cache(maxsize=256)
+def _cached_score_v2(
+    cache_key: str,
+    player_name: str,
+    version: str,
+    game_context_json: Optional[str],
+) -> Optional[BatterScoreResult]:
+    game_context = None
+    if game_context_json:
+        import json
+
+        game_context = json.loads(game_context_json)
+
+    return score_batter_v2(
+        player_name,
+        version=version,
+        game_context=game_context,
+    )
+
+
+def lookup_batter_score_v2(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    import json
+
+    context_json = (
+        json.dumps(game_context, sort_keys=True)
+        if game_context
+        else None
+    )
+    cache_key = _score_cache_key(player_name, game_context) + "|v2"
+
+    return _cached_score_v2(
         cache_key,
         player_name,
         version,

@@ -18,6 +18,9 @@ from utils import (
 PRIZEPICKS_FANTASY_LINES_PATH = (
     PROCESSED_DIR / "prizepicks_fantasy_lines.parquet"
 )
+UNDERDOG_FANTASY_LINES_PATH = (
+    PROCESSED_DIR / "underdog_fantasy_lines.parquet"
+)
 
 MARKET_STAT_MAP = {
     "batter_hits": ("batter", "hits"),
@@ -330,6 +333,62 @@ def count_games_vs_opponent(
     return int(len(filtered))
 
 
+def _hand_from_flag(value):
+    """Map batter_stand_L / pitcher_throws_L (1=L, 0=R) to L/R or None."""
+    if value is None or pd.isna(value):
+        return None
+
+    return "L" if float(value) >= 0.5 else "R"
+
+
+def _latest_hand_from_rows(player_rows, column):
+    if player_rows is None or player_rows.empty or column not in player_rows.columns:
+        return None
+
+    latest = player_rows.sort_values("game_date").iloc[-1]
+    return _hand_from_flag(latest.get(column))
+
+
+def lookup_batter_hand(player_name, version="v2"):
+    """Return L/R for a batter from the latest feature row, or None."""
+    cache = _kind_player_game_cache(_kind_player_cache_key("batter", version))
+    if not cache:
+        return None
+
+    player_key = _fuzzy_player_key(player_name, cache.keys())
+    if player_key is None:
+        return None
+
+    return _latest_hand_from_rows(cache[player_key], "batter_stand_L")
+
+
+def lookup_pitcher_hand(player_name, version="v2"):
+    """Return L/R for a pitcher from the latest feature row, or None."""
+    cache = _kind_player_game_cache(_kind_player_cache_key("pitcher", version))
+    if not cache:
+        return None
+
+    player_key = _fuzzy_player_key(player_name, cache.keys())
+    if player_key is None:
+        return None
+
+    return _latest_hand_from_rows(cache[player_key], "pitcher_throws_L")
+
+
+def lookup_player_hand_for_market(player_name, market, version="v2"):
+    """Return L/R based on prop market kind (batter vs pitcher)."""
+    if market is None or pd.isna(market):
+        return None
+
+    market = str(market)
+    if market.startswith("batter_"):
+        return lookup_batter_hand(player_name, version=version)
+    if market.startswith("pitcher_"):
+        return lookup_pitcher_hand(player_name, version=version)
+
+    return None
+
+
 def _player_key(name):
     return normalize_player_key(name)
 
@@ -422,12 +481,32 @@ def _pp_lines_cache_key():
     return (str(path), path.stat().st_mtime_ns)
 
 
+def _ud_lines_cache_key():
+    path = UNDERDOG_FANTASY_LINES_PATH
+    if not path.exists():
+        return (None, 0)
+    return (str(path), path.stat().st_mtime_ns)
+
+
 @lru_cache(maxsize=4)
 def _prizepicks_fantasy_line_map(cache_key):
     path_str, _mtime = cache_key
     if path_str is None:
         return {}
 
+    return _read_fantasy_line_map(path_str)
+
+
+@lru_cache(maxsize=4)
+def _underdog_fantasy_line_map(cache_key):
+    path_str, _mtime = cache_key
+    if path_str is None:
+        return {}
+
+    return _read_fantasy_line_map(path_str)
+
+
+def _read_fantasy_line_map(path_str):
     lines = pd.read_parquet(path_str)
     if lines.empty or "player" not in lines.columns:
         return {}
@@ -441,9 +520,7 @@ def _prizepicks_fantasy_line_map(cache_key):
     return line_map
 
 
-def lookup_prizepicks_fantasy_line(player_name):
-    """Return the PrizePicks fantasy score line for *player_name*, or None."""
-    line_map = _prizepicks_fantasy_line_map(_pp_lines_cache_key())
+def _lookup_fantasy_line(player_name, line_map):
     if not line_map:
         return None
 
@@ -454,9 +531,7 @@ def lookup_prizepicks_fantasy_line(player_name):
     return line_map[player_key]
 
 
-def format_prizepicks_fantasy_line(player_name) -> str:
-    """Format the posted PrizePicks fantasy score line for display."""
-    line = lookup_prizepicks_fantasy_line(player_name)
+def _format_fantasy_line_value(line):
     if line is None:
         return "—"
 
@@ -464,6 +539,32 @@ def format_prizepicks_fantasy_line(player_name) -> str:
         return str(int(line))
 
     return f"{line:.1f}"
+
+
+def lookup_prizepicks_fantasy_line(player_name):
+    """Return the PrizePicks fantasy score line for *player_name*, or None."""
+    line_map = _prizepicks_fantasy_line_map(_pp_lines_cache_key())
+    return _lookup_fantasy_line(player_name, line_map)
+
+
+def format_prizepicks_fantasy_line(player_name) -> str:
+    """Format the posted PrizePicks fantasy score line for display."""
+    return _format_fantasy_line_value(
+        lookup_prizepicks_fantasy_line(player_name)
+    )
+
+
+def lookup_underdog_fantasy_line(player_name):
+    """Return the Underdog Fantasy score line for *player_name*, or None."""
+    line_map = _underdog_fantasy_line_map(_ud_lines_cache_key())
+    return _lookup_fantasy_line(player_name, line_map)
+
+
+def format_underdog_fantasy_line(player_name) -> str:
+    """Format the posted Underdog Fantasy score line for display."""
+    return _format_fantasy_line_value(
+        lookup_underdog_fantasy_line(player_name)
+    )
 
 
 def rolling_pp_fantasy_over_rates(player_name, line, version="v2"):
