@@ -40,6 +40,12 @@ GLOSSARY = {
         "comparison with classifier Over %; not used for edge or EV in "
         "Phase 1."
     ),
+    "stuff_strikeout_v2": (
+        "Separate strikeout model (v2) from Statcast process metrics: "
+        "SwStr%, chase%, and velocity rolling rates → expected K% → Poisson "
+        "Pred # and Over %. Independent of Model % / Pred # / Dist Over %; "
+        "does not drive edge or EV."
+    ),
     "over_pct": (
         "Model probability that the player exceeds the posted line "
         "(stat > line). Computed once per player, market, book, and line — "
@@ -250,11 +256,13 @@ GLOSSARY = {
         "LightGBM prop probabilities."
     ),
     "batter_score_v2": (
-        "Same composite as Batter Score, but the **matchup grade** uses "
-        "individual Baseball Savant pitch types (4-Seam Fastball, Sinker, "
-        "Sweeper, etc.) instead of five buckets. Season, form, and pitcher "
-        "components are unchanged. Active when the opposing SP and detailed "
-        "Statcast arsenal are available; otherwise matches the Partial path."
+        "Batter Score v2 uses **20% / 30% / 35% / 15%** weights (season / "
+        "recent / matchup / pitcher form). Matchup grade uses individual "
+        "Baseball Savant pitch types (4-Seam, Sinker, Sweeper, etc.). "
+        "Pitcher form uses **FIP over the SP's last 5 starts** (constant "
+        "computed from merged Statcast cache) with optional H2H blend — "
+        "not ERA L5. Active when the opposing SP and detailed arsenal are "
+        "available; otherwise partial renormalization applies."
     ),
     "batter_score_season_baseline": (
         "Full-season per-game average of hits + total bases + walks (H+TB+BB), "
@@ -271,10 +279,12 @@ GLOSSARY = {
     ),
     "batter_score_pitcher_form": (
         "Opposing starter ERA over last 5 starts (letter-graded; lower ERA "
-        "= better for the batter). When the batter has ≥10 PA vs that SP, "
-        "H2H H+TB+BB performance is blended in (30% of pitcher form). Gated "
-        "off when SP is TBD; optional team-level opp_team_earned_runs proxy "
-        "at reduced weight when enabled in code."
+        "= better for the batter). Batter Score **v2** uses **FIP (L5)** "
+        "with the league constant from merged Statcast instead of ERA. When "
+        "the batter has ≥10 PA vs that SP, H2H H+TB+BB performance is blended "
+        "in (30% of pitcher form). Gated off when SP is TBD; optional "
+        "team-level opp_team_earned_runs proxy at reduced weight when "
+        "enabled in code."
     ),
     "batter_score_h2h": (
         "Career plate appearances vs the listed opposing starter from "
@@ -348,11 +358,11 @@ GLOSSARY = {
         "Duplicates are skipped automatically."
     ),
     "hitters_life_lineup_filter": (
-        "**Rotowire lineup filter** orders batters using each team's default "
-        "lineup vs the opposing starter's hand (Default vs. RHP / vs. LHP on "
-        "Rotowire). Away batters follow the away lineup vs the home SP; home "
-        "batters follow the home lineup vs the away SP. Only batters on "
-        "today's prop slate are shown."
+        "**Rotowire lineup filter** orders batters 1–9 using each team's "
+        "**Today's Lineup** when `./run_official_lineups.sh` has cached it; "
+        "otherwise falls back to the default order vs the opposing starter's "
+        "hand (Default vs. RHP / vs. LHP). Only batters on today's prop "
+        "slate are shown."
     ),
 }
 

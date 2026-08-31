@@ -11,6 +11,10 @@ from batter_score_data import (
     lookup_batter_score_v2,
     lookup_h2h_board_stats,
 )
+from hitters_life_data import (
+    format_batting_average_column,
+    format_total_bases_game_log,
+)
 from ui.batter_score import format_batter_score_display
 from ui.batter_score_highlights import (
     HIT_RATE_THRESHOLD,
@@ -25,9 +29,13 @@ from ui.batter_score_highlights import (
     l5_l10_style,
     vs_pitcher_style,
 )
-from ui.pick_builder import render_batter_score_add_controls
+from ui.hitters_life_highlights import (
+    batting_average_style,
+    total_bases_log_style,
+)
 from ui.formatting import format_game_time, format_name_with_hand, player_path
 from ui.glossary import GLOSSARY
+from ui.pick_builder import render_batter_score_add_controls
 from ui.player_stats import (
     BATTER_MARKETS,
     _format_l5_l10_pct,
@@ -42,6 +50,19 @@ from ui.player_stats import (
 
 # Board "Vs pitcher" column — lower bar than MIN_PA_H2H (10) used in scoring.
 MIN_PA_H2H_BOARD = 3
+
+BATTER_SCORE_BY_GAME_DISPLAY_COLUMNS = [
+    "player_link",
+    "opposing_sp",
+    "vs_pitcher",
+    "batting_average",
+    "pp_fantasy_line",
+    "ud_fantasy_line",
+    "l5_l10_pct",
+    "batter_score_display",
+    "batter_score_v2_display",
+    "total_bases_log",
+]
 
 
 def _resolve_l5_l10_pct(row, version: str, *, pp_line=None) -> tuple[str, float, float]:
@@ -101,6 +122,8 @@ def style_batter_score_board(full_df: pd.DataFrame):
     vs_pitcher_styles = []
     l5_l10_styles = []
     row_highlight = []
+    batting_avg_styles = []
+    tb_log_styles = []
 
     for idx, meta in meta_df.iterrows():
         pp_line = meta["_pp_line"]
@@ -121,6 +144,16 @@ def style_batter_score_board(full_df: pd.DataFrame):
         l5_hit = not pd.isna(l5_pct) and float(l5_pct) >= HIT_RATE_THRESHOLD
         l10_hit = not pd.isna(l10_pct) and float(l10_pct) >= HIT_RATE_THRESHOLD
         row_highlight.append(ud_is_lower and l5_hit and l10_hit)
+
+        avg_cell = full_df.iloc[idx].get("_batting_average")
+        if avg_cell is None or (isinstance(avg_cell, float) and pd.isna(avg_cell)):
+            avg_cell = full_df.iloc[idx].get("batting_average")
+        batting_avg_styles.append(batting_average_style(avg_cell))
+
+        tb_cell = full_df.iloc[idx].get("_total_bases_log")
+        if tb_cell is None or (isinstance(tb_cell, float) and pd.isna(tb_cell)):
+            tb_cell = full_df.iloc[idx].get("total_bases_log")
+        tb_log_styles.append(total_bases_log_style(tb_cell))
 
     def _apply_row_styles(row):
         idx = row.name
@@ -149,6 +182,12 @@ def style_batter_score_board(full_df: pd.DataFrame):
                 border,
             )
 
+        if batting_avg_styles[idx] and "batting_average" in columns:
+            styles[columns.index("batting_average")] = batting_avg_styles[idx]
+
+        if tb_log_styles[idx] and "total_bases_log" in columns:
+            styles[columns.index("total_bases_log")] = tb_log_styles[idx]
+
         if border:
             for col_idx, col in enumerate(columns):
                 if styles[col_idx]:
@@ -160,12 +199,17 @@ def style_batter_score_board(full_df: pd.DataFrame):
     return display_df.style.apply(_apply_row_styles, axis=1)
 
 
-def _render_batter_score_dataframe(df: pd.DataFrame, *, height: int):
+def _render_batter_score_dataframe(
+    df: pd.DataFrame,
+    *,
+    height: int,
+    column_config=None,
+):
     st.dataframe(
         style_batter_score_board(df),
         hide_index=True,
         height=height,
-        column_config=_batter_score_table_column_config(),
+        column_config=column_config or _batter_score_table_column_config(),
     )
 
 
@@ -235,7 +279,7 @@ def build_top_batter_score_df(
     return result.drop(columns=["_game"], errors="ignore")
 
 
-def _build_batter_score_row(row, version: str) -> dict:
+def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) -> dict:
     game_context = _row_game_context(row)
     result = lookup_batter_score(
         row["player"],
@@ -274,13 +318,12 @@ def _build_batter_score_row(row, version: str) -> dict:
         h2h_ab=h2h_ab,
     )
 
-    return {
+    built = {
         "player": row["player"],
         "player_link": player_path(
             row["player"],
             hand=lookup_batter_hand(row["player"], version=version),
         ),
-        "game_time": _format_game_time(row),
         "opposing_sp": opposing,
         "vs_pitcher": vs_pitcher,
         "pp_fantasy_line": format_prizepicks_fantasy_line(row["player"]),
@@ -303,6 +346,18 @@ def _build_batter_score_row(row, version: str) -> dict:
         "_l10_pct": l10_pct,
     }
 
+    if for_game_board:
+        batting_average = format_batting_average_column(row["player"], version)
+        tb_log = format_total_bases_game_log(row["player"], version=version)
+        built["batting_average"] = batting_average
+        built["total_bases_log"] = tb_log
+        built["_batting_average"] = batting_average
+        built["_total_bases_log"] = tb_log
+    else:
+        built["game_time"] = _format_game_time(row)
+
+    return built
+
 
 def render_top_batter_scores(
     df: pd.DataFrame,
@@ -310,7 +365,7 @@ def render_top_batter_scores(
     *,
     version: str = "v2",
 ):
-    """Render Top 10 Batter Score table at the bottom of the board."""
+    """Render Top 10 Batter Score table on the Hitter's Life page."""
     markets = st.session_state.get(f"{key_prefix}_markets", [])
     top_df = build_top_batter_score_df(
         df,
@@ -348,6 +403,34 @@ def render_top_batter_scores(
         top_df,
         height=min(42 * len(top_df) + 38, 480),
     )
+
+
+def _batter_score_by_game_column_config():
+    config = _batter_score_table_column_config()
+    config.pop("game_time", None)
+    config["batting_average"] = st.column_config.TextColumn(
+        "Batting average",
+        help=(
+            "Full-season AVG and rolling AVG over the last 5 and 10 games "
+            "(Statcast). Green: L10 above .290 with L5 above .250. Orange: "
+            "L5 above .299. Yellow: season above .300 when neither rolling "
+            "rule applies."
+        ),
+    )
+    config["total_bases_log"] = st.column_config.TextColumn(
+        "TB per game (L5)",
+        help=(
+            "Total bases in each of the last 5 games (space-separated). "
+            "Leftmost number is the most recent game. "
+            "Colors: blue soarer (2+ TB last three); green money (no zero, "
+            "two+ games 2+ TB); orange hot (one zero — 0 last with 2+ TB "
+            "in two before, or zero elsewhere with 2nd-most-recent 2+ TB "
+            "and one other 2+ TB); yellow warm (1 TB and 2+ TB in last "
+            "two, not 2+2). Super-rare 3+ TB burst also highlights the "
+            "name in red (not shown in legend)."
+        ),
+    )
+    return config
 
 
 def _batter_score_table_column_config():
@@ -389,10 +472,8 @@ def _batter_score_table_column_config():
             "L5 / L10 %",
             help=(
                 "Share of the player's last 5 / 10 completed games where "
-                "their PrizePicks fantasy score strictly exceeded the "
-                "posted PP fantasy line. When no PP line is available, "
-                "shows over-rate vs the market line on that player's "
-                "top prop row instead."
+                "their PrizePicks fantasy score (from pp_fantasy_game_scores "
+                "archive) strictly exceeded the posted PP fantasy line."
             ),
         ),
         "batter_score_display": st.column_config.TextColumn(
@@ -433,9 +514,14 @@ def _prepare_batter_score_slate(
     )
 
 
-def _rows_from_batter_slate(ranked: pd.DataFrame, version: str) -> list[dict]:
+def _rows_from_batter_slate(
+    ranked: pd.DataFrame,
+    version: str,
+    *,
+    for_game_board: bool = False,
+) -> list[dict]:
     return [
-        _build_batter_score_row(row, version)
+        _build_batter_score_row(row, version, for_game_board=for_game_board)
         for _, row in ranked.iterrows()
     ]
 
@@ -456,7 +542,9 @@ def build_all_batter_score_df(
     if ranked.empty:
         return pd.DataFrame()
 
-    return pd.DataFrame(_rows_from_batter_slate(ranked, version))
+    return pd.DataFrame(
+        _rows_from_batter_slate(ranked, version, for_game_board=True)
+    )
 
 
 def render_game_batter_scores(
@@ -465,7 +553,9 @@ def render_game_batter_scores(
     *,
     version: str = "v2",
 ):
-    """Render all batters with a game filter below Top 10 Batter Score."""
+    """Render all batters with a game filter on the Hitter's Life page."""
+    from ui.hitters_life_highlights import render_tb_log_color_legend
+
     markets = st.session_state.get(f"{key_prefix}_markets", [])
     all_df = build_all_batter_score_df(
         df,
@@ -478,9 +568,12 @@ def render_game_batter_scores(
         "All batters on today's slate (best Batter Score row per player). "
         "**PP fantasy** and **UD fantasy** are each hitter's posted DFS "
         "fantasy score line (PrizePicks and Underdog). "
-        "Select a game to narrow the list. Respects Market type filter like "
-        "Top 10; independent of Edge / EV filters. "
-        "Cell colors match Top 10 (orange lower PP/UD, sky blue when equal, light green H2H AVG > .300, yellow/green L5/L10, red outline combo). "
+        "Use the **Game** filter above the table to narrow to one matchup. "
+        "Respects Market type filter like Top 10; independent of Edge / EV "
+        "filters. "
+        "PP/UD, Vs pitcher H2H, and L5/L10 colors match Top 10. "
+        "**Batting average** and **TB per game (L5)** colors match the "
+        "Batting average board. "
         "Batter score v2 uses Savant pitch-type matchup."
     )
     if is_batter_score_validated():
@@ -488,6 +581,7 @@ def render_game_batter_scores(
     else:
         caption += " Batter Score — validation pending."
     st.caption(caption)
+    render_tb_log_color_legend()
 
     if all_df.empty:
         st.caption("No batter scores available for the current slate.")
@@ -511,7 +605,20 @@ def render_game_batter_scores(
 
     render_batter_score_add_controls(display_df, key_prefix)
 
+    meta_cols = [
+        col
+        for col in display_df.columns
+        if col.startswith("_") or col in {"player", "batter_score_label"}
+    ]
+    visible_cols = [
+        col
+        for col in BATTER_SCORE_BY_GAME_DISPLAY_COLUMNS
+        if col in display_df.columns
+    ]
+    table_df = display_df[visible_cols + meta_cols]
+
     _render_batter_score_dataframe(
-        display_df,
+        table_df,
         height=min(42 * len(display_df) + 38, 720),
+        column_config=_batter_score_by_game_column_config(),
     )

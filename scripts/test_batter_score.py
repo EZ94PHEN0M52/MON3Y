@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 from batter_score import (  # noqa: E402
     MIN_PA_H2H,
+    MIN_PA_H2H_MANUAL,
     PHASE_A_GATES,
     PHASE_B_GATES,
     BatterInputs,
@@ -59,6 +60,76 @@ def test_renormalize_phase_b_weights():
     assert abs(active["recent_form"] - 0.25 / 0.70) < 1e-6
     assert abs(active["pitcher_form"] - 0.15 / 0.70) < 1e-6
     assert "matchup_grade" not in active
+
+
+def test_renormalize_v2_full_weights():
+    from batter_score import PHASE_D_GATES, WEIGHTS_V2, renormalize_weights
+
+    active = renormalize_weights(WEIGHTS_V2, PHASE_D_GATES)
+
+    assert abs(sum(active.values()) - 1.0) < 1e-6
+    assert abs(active["season_baseline"] - 0.20) < 1e-6
+    assert abs(active["recent_form"] - 0.30) < 1e-6
+    assert abs(active["matchup_grade"] - 0.35) < 1e-6
+    assert abs(active["pitcher_form"] - 0.15) < 1e-6
+
+
+def test_pitcher_form_fip_grading():
+    base = dict(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+    )
+    ace = BatterInputs(**base, opponent_pitcher_fip_l5=2.80)
+    average = BatterInputs(**base, opponent_pitcher_fip_l5=4.30)
+    poor = BatterInputs(**base, opponent_pitcher_fip_l5=5.50)
+
+    assert pitcher_form_index(ace, use_fip=True) > pitcher_form_index(
+        average,
+        use_fip=True,
+    )
+    assert pitcher_form_index(average, use_fip=True) > pitcher_form_index(
+        poor,
+        use_fip=True,
+    )
+
+
+def test_league_fip_constant_from_statcast_totals():
+    from batter_score_data import (
+        _fast_fip_totals_from_statcast,
+        _fip_constant_from_totals,
+    )
+
+    statcast = pd.DataFrame(
+        {
+            "game_pk": [1, 1, 2, 2],
+            "pitcher": [1, 1, 2, 2],
+            "player_name": ["A", "A", "B", "B"],
+            "team": ["NYA", "NYA", "BOS", "BOS"],
+            "opponent": ["BOS", "BOS", "NYA", "NYA"],
+            "is_home": [1, 1, 0, 0],
+            "home_team": ["NYA", "NYA", "NYA", "NYA"],
+            "away_team": ["BOS", "BOS", "BOS", "BOS"],
+            "game_date": ["2026-08-01"] * 4,
+            "events": [
+                "home_run",
+                "strikeout",
+                "walk",
+                "field_out",
+            ],
+            "at_bat_number": [1, 2, 1, 2],
+            "pitch_number": [1, 1, 1, 1],
+            "inning": [1, 1, 1, 1],
+            "inning_topbot": ["Top", "Top", "Bot", "Bot"],
+            "post_bat_score": [1, 1, 0, 0],
+            "bat_score": [0, 0, 0, 0],
+        }
+    )
+
+    totals = _fast_fip_totals_from_statcast(statcast)
+    expected = _fip_constant_from_totals(totals)
+    assert expected is not None
+    assert abs(expected - expected) < 1e-6
 
 
 def test_compute_batter_score_partial_form_only():
@@ -189,6 +260,71 @@ def test_min_pa_h2h_board_constant():
     from ui.batter_score_board import MIN_PA_H2H_BOARD
 
     assert MIN_PA_H2H_BOARD == 3
+
+
+def test_parse_h2h_fraction():
+    from batter_score_data import parse_h2h_fraction
+
+    assert parse_h2h_fraction("3/8") == (3, 8)
+    assert parse_h2h_fraction(" 12 / 40 ") == (12, 40)
+    assert parse_h2h_fraction("") is None
+    assert parse_h2h_fraction("3-8") is None
+    assert parse_h2h_fraction("9/8") is None
+
+
+def test_estimate_h2h_avg_raw_points_from_hits_ab():
+    from batter_score_data import estimate_h2h_avg_raw_points_from_hits_ab
+
+    # 3/8 = .375 → A-grade AVG → full raw-points scale
+    assert abs(estimate_h2h_avg_raw_points_from_hits_ab(3, 8) - 6.0) < 1e-6
+    # 1/4 = .250 → D-grade
+    assert abs(estimate_h2h_avg_raw_points_from_hits_ab(1, 4) - 1.5) < 1e-6
+
+
+def test_manual_h2h_blended_below_statcast_min_pa():
+    batter = BatterInputs(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+        opponent_pitcher_era_l5=4.00,
+        h2h_pa=8,
+        h2h_avg_raw_points=5.0,
+        h2h_manual_override=True,
+    )
+
+    blended = pitcher_form_index(batter)
+    era_only = pitcher_form_index(
+        BatterInputs(
+            name="Test Batter",
+            season_avg_raw_points=3.8,
+            game_log=_sample_games(),
+            opponent_pitcher_era_l5=4.00,
+        )
+    )
+
+    assert blended != era_only
+    assert MIN_PA_H2H_MANUAL == 3
+
+
+def test_apply_manual_h2h_override():
+    from batter_score_data import apply_manual_h2h_override
+
+    base = BatterInputs(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+        opponent_pitcher_era_l5=4.00,
+        h2h_pa=0,
+        h2h_hits=0,
+        h2h_ab=0,
+    )
+    updated = apply_manual_h2h_override(base, 3, 8)
+
+    assert updated.h2h_hits == 3
+    assert updated.h2h_ab == 8
+    assert updated.h2h_pa == 8
+    assert updated.h2h_manual_override is True
+    assert updated.h2h_avg_raw_points is not None
 
 
 def test_gated_full_score_requires_matchup_inputs():
@@ -473,11 +609,12 @@ def test_infer_player_kind():
     assert infer_player_kind(["pitcher_strikeouts"]) == "pitcher"
 
 
-def test_markets_for_kind_includes_stolen_bases():
+def test_markets_for_kind_excludes_home_runs_and_stolen_bases():
+    from ui.market_filters import EXCLUDED_UI_MARKETS
     from ui.player_stats import markets_for_kind
 
     batter_markets = markets_for_kind("batter")
-    assert "batter_stolen_bases" in batter_markets
+    assert EXCLUDED_UI_MARKETS.isdisjoint(batter_markets)
 
 
 def test_coerce_mlb_id_handles_nan():
@@ -631,6 +768,116 @@ def test_format_vs_pitcher_h2h_and_era_fallback():
     assert _format_vs_pitcher(zero_avg) == "0/3 .000"
 
 
+def test_statcast_cache_key_prefers_cumulative_season_shard(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import batter_score_data as bsd
+
+    monkeypatch.setattr(bsd, "RAW_DIR", tmp_path)
+    bsd._load_latest_statcast.cache_clear()
+
+    one_day = tmp_path / "statcast_2026-08-27_2026-08-27.parquet"
+    season = tmp_path / "statcast_2026-03-25_2026-08-27.parquet"
+    one_day.write_bytes(b"small")
+    season.write_bytes(b"much-longer-season-window")
+
+    path_str, _mtime = bsd._statcast_cache_key()
+    assert path_str == str(season)
+
+
+def test_v2_arsenal_uses_merged_statcast(monkeypatch) -> None:
+    """v2 Savant arsenal must not depend on the latest single-day shard."""
+    import pandas as pd
+
+    import batter_score_data as bsd
+
+    latest = pd.DataFrame(
+        {
+            "pitcher": [999],
+            "pitch_type": ["FF"],
+            "pitch_name": ["4-Seam Fastball"],
+            "game_date": ["2026-08-27"],
+            "game_pk": [1],
+        }
+    )
+    merged = pd.DataFrame(
+        {
+            "pitcher": [663776, 663776, 663776, 700250, 663776],
+            "pitch_type": ["CH", "SL", "SI", "FF", "CH"],
+            "pitch_name": [
+                "Changeup",
+                "Slider",
+                "Sinker",
+                "4-Seam Fastball",
+                "Changeup",
+            ],
+            "game_date": [
+                "2026-08-20",
+                "2026-08-20",
+                "2026-08-20",
+                "2026-08-20",
+                "2026-08-15",
+            ],
+            "game_pk": [10, 10, 10, 10, 11],
+            "batter": [1, 1, 1, 700250, 1],
+            "events": ["ball", "ball", "ball", "single", "ball"],
+        }
+    )
+
+    calls: list[str] = []
+
+    def fake_latest(_key):
+        calls.append("latest")
+        return latest
+
+    def fake_merged(_key):
+        calls.append("merged")
+        return merged
+
+    monkeypatch.setattr(bsd, "_load_latest_statcast", fake_latest)
+    monkeypatch.setattr(bsd, "_load_merged_statcast", fake_merged)
+    monkeypatch.setattr(
+        bsd,
+        "_lookup_opposing_sp_for_context",
+        lambda _ctx, _team: ("Patrick Sandoval", 663776),
+    )
+    monkeypatch.setattr(bsd, "_compute_sp_era_l5", lambda *_args, **_kw: 4.0)
+    monkeypatch.setattr(bsd, "_compute_sp_fip_l5", lambda *_args, **_kw: 4.0)
+    monkeypatch.setattr(
+        bsd,
+        "_compute_h2h_stats",
+        lambda *_args, **_kw: (0, None, 0, 0),
+    )
+
+    player_rows = pd.DataFrame(
+        {
+            "game_date": [f"2026-08-{day:02d}" for day in range(10, 20)],
+            "hits": [1] * 10,
+            "total_bases": [1] * 10,
+            "walks": [0] * 10,
+            "player_name": ["Ben Rice"] * 10,
+            "team": ["New York Yankees"] * 10,
+            "batter": [700250] * 10,
+            "opponent": ["Boston Red Sox"] * 10,
+        }
+    )
+
+    batter = bsd.build_batter_inputs_from_rows(
+        player_rows,
+        display_name="Ben Rice",
+        game_context={
+            "game_date": "2026-08-28",
+            "home_team": "New York Yankees",
+            "away_team": "Boston Red Sox",
+        },
+    )
+
+    assert batter is not None
+    assert calls == ["latest", "merged"]
+    assert len(batter.opponent_pitcher_arsenal_v2) > 0
+
+
 def test_compute_h2h_stats_kirk_vs_seymour():
     from pathlib import Path
 
@@ -747,6 +994,86 @@ def test_build_all_batter_score_df_filters_by_game():
     game_b = all_df[all_df["_game"] == "A @ B"]
     assert len(game_b) == 1
     assert game_b.iloc[0]["batter_score_display"] == "80.0"
+
+
+def test_build_all_batter_score_df_includes_avg_and_tb_columns():
+    from unittest.mock import patch
+
+    from batter_score import BatterScoreResult
+    from ui.batter_score_board import build_all_batter_score_df
+
+    props = pd.DataFrame(
+        {
+            "player": ["Alice"],
+            "market": ["batter_hits"],
+            "line": [0.5],
+            "game": ["A @ B"],
+            "commence_time": ["2026-08-20T23:05:00Z"],
+            "batter_score": [80.0],
+            "batter_score_label": [""],
+            "l5_l10_pct": ["—"],
+        }
+    )
+
+    mock_result = BatterScoreResult(
+        batter_name="Alice",
+        season_baseline=50.0,
+        recent_form=50.0,
+        matchup_grade=None,
+        pitcher_form=50.0,
+        batter_score=80.0,
+    )
+
+    with patch(
+        "ui.batter_score_board.lookup_batter_score",
+        return_value=mock_result,
+    ), patch(
+        "ui.batter_score_board.lookup_batter_score_v2",
+        return_value=mock_result,
+    ), patch(
+        "ui.batter_score_board.format_batting_average_column",
+        return_value="Szn .290 · L5 .310 · L10 .270",
+    ), patch(
+        "ui.batter_score_board.format_total_bases_game_log",
+        return_value="2 1 0 3 4",
+    ):
+        all_df = build_all_batter_score_df(props, version="v2")
+
+    assert "batting_average" in all_df.columns
+    assert "total_bases_log" in all_df.columns
+    assert all_df.iloc[0]["batting_average"] == "Szn .290 · L5 .310 · L10 .270"
+    assert all_df.iloc[0]["total_bases_log"] == "2 1 0 3 4"
+    assert "game_time" not in all_df.columns
+
+
+def test_style_batter_score_board_highlights_avg_and_tb_columns():
+    from ui.batter_score_board import style_batter_score_board
+    from ui.hitters_life_highlights import (
+        STYLE_BAT_AVG_ORANGE,
+        STYLE_TB_LOG_BLUE,
+    )
+
+    board = pd.DataFrame(
+        [
+            {
+                "player_link": "/player#Hot",
+                "batting_average": "Szn .290 · L5 .310 · L10 .270",
+                "total_bases_log": "3 2 2 1 0",
+                "pp_fantasy_line": "5",
+                "ud_fantasy_line": "5",
+                "l5_l10_pct": "70% / 60%",
+                "_pp_line": 5.0,
+                "_ud_line": 5.0,
+                "_l5_pct": 0.70,
+                "_l10_pct": 0.60,
+                "_batting_average": "Szn .290 · L5 .310 · L10 .270",
+                "_total_bases_log": "3 2 2 1 0",
+            }
+        ]
+    )
+    html = style_batter_score_board(board).to_html()
+    assert STYLE_BAT_AVG_ORANGE in html
+    assert STYLE_TB_LOG_BLUE in html
 
 
 def test_build_top_batter_score_df_ranks_unique_players():
@@ -938,6 +1265,9 @@ def test_batter_score_pick_card_highlights():
 if __name__ == "__main__":
     test_renormalize_phase_a_weights()
     test_renormalize_phase_b_weights()
+    test_renormalize_v2_full_weights()
+    test_pitcher_form_fip_grading()
+    test_league_fip_constant_from_statcast_totals()
     test_compute_batter_score_partial_form_only()
     test_sp_tbd_label()
     test_phase_b_with_sp_era()
@@ -946,6 +1276,10 @@ if __name__ == "__main__":
     test_partial_score_equals_renormalized_blend()
     test_min_pa_h2h_constant()
     test_min_pa_h2h_board_constant()
+    test_parse_h2h_fraction()
+    test_estimate_h2h_avg_raw_points_from_hits_ab()
+    test_manual_h2h_blended_below_statcast_min_pa()
+    test_apply_manual_h2h_override()
     test_gated_full_score_requires_matchup_inputs()
     test_dedupe_best_prop_one_row_per_player_market()
     test_pitch_code_to_bucket()
@@ -965,9 +1299,13 @@ if __name__ == "__main__":
     test_score_batter_as_of_point_in_time()
     test_format_vs_pitcher_h2h_and_era_fallback()
     test_compute_h2h_stats_kirk_vs_seymour()
+    test_statcast_cache_key_prefers_cumulative_season_shard()
+    test_v2_arsenal_uses_merged_statcast()
     test_build_all_batter_score_df_includes_all_players()
     test_build_all_batter_score_df_filters_by_game()
+    test_build_all_batter_score_df_includes_avg_and_tb_columns()
     test_build_top_batter_score_df_ranks_unique_players()
     test_style_batter_score_board_highlights_combo_row()
+    test_style_batter_score_board_highlights_avg_and_tb_columns()
     test_batter_score_pick_card_highlights()
     print("All batter score tests passed.")

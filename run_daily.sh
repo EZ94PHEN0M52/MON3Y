@@ -98,6 +98,9 @@ if ! python scripts/ensure_features.py \
   exit 1
 fi
 
+echo ">>> Building PP fantasy score archive (L5/L10 source)..."
+python scripts/build_pp_fantasy_scores.py --version v2
+
 if $RUN_TRAIN; then
   echo ">>> Checking training features ($TRAIN_START → $TRAIN_END, v2)..."
   if ! python scripts/ensure_features.py \

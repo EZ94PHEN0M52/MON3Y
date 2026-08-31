@@ -18,8 +18,6 @@ from utils import (
 MODEL_MAP = {
     "batter_hits":
         "batter_hits.pkl",
-    "batter_home_runs":
-        "batter_home_runs.pkl",
     "batter_total_bases":
         "batter_total_bases.pkl",
     "batter_rbis":
@@ -30,8 +28,6 @@ MODEL_MAP = {
         "batter_walks.pkl",
     "batter_hits_runs_rbis":
         "batter_hits_runs_rbis.pkl",
-    "batter_stolen_bases":
-        "batter_stolen_bases.pkl",
     "pitcher_strikeouts":
         "pitcher_strikeouts.pkl",
     "pitcher_walks":

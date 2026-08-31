@@ -11,15 +11,19 @@ from utils import (
 )
 
 
+# Not fetched live — saves Odds API credits (~10 × regions per market per event).
+EXCLUDED_LIVE_PROP_MARKETS = frozenset({
+    "batter_home_runs",
+    "batter_stolen_bases",
+})
+
 PROP_MARKETS = [
     "batter_hits",
-    "batter_home_runs",
     "batter_total_bases",
     "batter_rbis",
     "batter_runs_scored",
     "batter_walks",
     "batter_hits_runs_rbis",
-    "batter_stolen_bases",
     "pitcher_strikeouts",
     "pitcher_walks",
     "pitcher_hits_allowed",

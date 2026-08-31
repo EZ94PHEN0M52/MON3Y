@@ -6,11 +6,10 @@ from prop_scoring import MODEL_MAP
 from ui.formatting import market_label
 from ui.glossary import GLOSSARY
 
-# Trained and scored in the pipeline, but not shown in Streamlit.
-EXCLUDED_UI_MARKETS = frozenset({
-    "batter_home_runs",
-    "batter_stolen_bases",
-})
+# Trained/scored offline only; hidden from Streamlit and live Odds API fetch.
+from odds_api import EXCLUDED_LIVE_PROP_MARKETS
+
+EXCLUDED_UI_MARKETS = EXCLUDED_LIVE_PROP_MARKETS
 
 
 def exclude_ui_markets(df):

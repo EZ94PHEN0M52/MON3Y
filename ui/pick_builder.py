@@ -478,7 +478,7 @@ def render_sidebar_batter_score_pick_builder():
 
     if not picks:
         st.sidebar.caption(
-            "No batters yet. Add from **Batter score by game** below the board."
+            "No batters yet. Add from **Batter score by game** on **Hitter's Life**."
         )
         return
 

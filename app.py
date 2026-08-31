@@ -46,7 +46,7 @@ def load_predictions(version):
         st.stop()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner="Loading board data…")
 def load_board_data(version, predictions_mtime):
     """
     Cached board dataframe: predictions CSV + enrichment from local parquets.

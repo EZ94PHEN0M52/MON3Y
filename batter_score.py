@@ -2,11 +2,11 @@
 Batter Score model
 ===================
 A composite 0-100 rating for a batter's upcoming game, blending:
-  1. Season baseline        (H + TB + BB per game)              - 30%
-  2. Recent form             L5/L10 blend of the same stat       - 25%
+  1. Season baseline        (H + TB + BB per game)              - 20%
+  2. Recent form             L5/L10 blend of the same stat       - 30%
   3. Matchup grade            wOBA-vs-pitch (35%) + AVG-vs-pitch (65%),
                                usage-weighted across the opposing
-                               pitcher's arsenal                  - 30%
+                               pitcher's arsenal                  - 35%
   4. Pitcher recent form      opposing starter's ERA, last 5      - 15%
 
 Phase A uses season baseline + recent form only; matchup is gated off
@@ -25,8 +25,14 @@ from typing import Dict, List, Optional
 # Minimum PA vs a specific SP before H2H stats are blended (Phase B).
 MIN_PA_H2H = 10
 
+# Lower bar when the user supplies career H2H H/AB manually (pre-2024 history).
+MIN_PA_H2H_MANUAL = 3
+
 # Share of pitcher-form index from H2H when PA threshold is met.
 H2H_PITCHER_FORM_BLEND = 0.30
+
+# Stronger blend when the user supplies career H2H H/AB (manual calculator).
+H2H_PITCHER_FORM_BLEND_MANUAL = 0.55
 
 # Optional soft fallback when SP is TBD: team opp_team_earned_runs proxy at
 # reduced weight (disabled by default — see batter_score_data.py).
@@ -56,6 +62,21 @@ class Weights:
             raise ValueError(
                 f"Component weights must sum to 1.0, got {total:.4f}"
             )
+
+
+WEIGHTS_V1 = Weights(
+    season_baseline=0.30,
+    recent_form=0.25,
+    matchup_grade=0.30,
+    pitcher_form=0.15,
+)
+
+WEIGHTS_V2 = Weights(
+    season_baseline=0.20,
+    recent_form=0.30,
+    matchup_grade=0.35,
+    pitcher_form=0.15,
+)
 
 
 @dataclass
@@ -151,6 +172,16 @@ ERA_THRESHOLDS = [
     (4.50, "C", 2),
     (5.50, "D", 1),
     (float("inf"), "F", 0),
+]
+
+# FIP thresholds (Batter Score v2): lower FIP = better for the batter.
+FIP_THRESHOLDS = [
+    (3.00, "A", 4),   # Excellent / Ace
+    (3.50, "B", 3),   # fills 3.00–3.50
+    (4.00, "B", 3),   # Good / above average
+    (4.50, "C", 2),   # Average
+    (5.00, "D", 1),   # fills 4.50–5.00
+    (float("inf"), "F", 0),  # Below average
 ]
 
 MAX_GRADE_POINTS = 4  # A = 4 points, used to normalize grade blends to a 0-100 index
@@ -265,11 +296,13 @@ class BatterInputs:
         default_factory=list,
     )
     opponent_pitcher_era_l5: Optional[float] = None
+    opponent_pitcher_fip_l5: Optional[float] = None
     opposing_sp_name: Optional[str] = None
     h2h_pa: Optional[int] = None
     h2h_avg_raw_points: Optional[float] = None
     h2h_hits: Optional[int] = None
     h2h_ab: Optional[int] = None
+    h2h_manual_override: bool = False
     team_opp_earned_runs_proxy: Optional[float] = None
     max_raw_points_for_100: float = 6.0   # scaling benchmark for the 0-100 index
 
@@ -336,9 +369,10 @@ def matchup_grade_index(
 
 
 def _h2h_form_index(batter: BatterInputs) -> Optional[float]:
+    min_pa = MIN_PA_H2H_MANUAL if batter.h2h_manual_override else MIN_PA_H2H
     if (
         batter.h2h_pa is None
-        or batter.h2h_pa < MIN_PA_H2H
+        or batter.h2h_pa < min_pa
         or batter.h2h_avg_raw_points is None
     ):
         return None
@@ -379,6 +413,7 @@ def pitcher_form_index(
     *,
     h2h_blend: float = H2H_PITCHER_FORM_BLEND,
     use_team_proxy: bool = False,
+    use_fip: bool = False,
 ) -> float:
     if use_team_proxy:
         proxy_index = _team_pitching_proxy_index(batter)
@@ -388,23 +423,39 @@ def pitcher_form_index(
             "team_opp_earned_runs_proxy is required for team proxy pitcher_form"
         )
 
-    if batter.opponent_pitcher_era_l5 is None:
-        raise ValueError(
-            "opponent_pitcher_era_l5 is required for pitcher_form"
+    if use_fip:
+        if batter.opponent_pitcher_fip_l5 is None:
+            raise ValueError(
+                "opponent_pitcher_fip_l5 is required for FIP pitcher_form"
+            )
+        _, points = grade_max_threshold(
+            batter.opponent_pitcher_fip_l5,
+            FIP_THRESHOLDS,
         )
+        pitcher_metric_index = points / MAX_GRADE_POINTS * 100
+    else:
+        if batter.opponent_pitcher_era_l5 is None:
+            raise ValueError(
+                "opponent_pitcher_era_l5 is required for pitcher_form"
+            )
 
-    _, points = grade_max_threshold(
-        batter.opponent_pitcher_era_l5,
-        ERA_THRESHOLDS,
-    )
-    era_index = points / MAX_GRADE_POINTS * 100
+        _, points = grade_max_threshold(
+            batter.opponent_pitcher_era_l5,
+            ERA_THRESHOLDS,
+        )
+        pitcher_metric_index = points / MAX_GRADE_POINTS * 100
 
     h2h_index = _h2h_form_index(batter)
     if h2h_index is None:
-        return era_index
+        return pitcher_metric_index
 
-    blend = max(0.0, min(1.0, h2h_blend))
-    return (1.0 - blend) * era_index + blend * h2h_index
+    effective_blend = (
+        H2H_PITCHER_FORM_BLEND_MANUAL
+        if batter.h2h_manual_override
+        else h2h_blend
+    )
+    blend = max(0.0, min(1.0, effective_blend))
+    return (1.0 - blend) * pitcher_metric_index + blend * h2h_index
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +476,7 @@ class BatterScoreResult:
     gated_components: List[str] = field(default_factory=list)
     opposing_sp_name: Optional[str] = None
     opposing_sp_era_l5: Optional[float] = None
+    opposing_sp_fip_l5: Optional[float] = None
     h2h_pa: Optional[int] = None
     h2h_avg_raw_points: Optional[float] = None
     h2h_hits: Optional[int] = None
@@ -458,6 +510,10 @@ class BatterScoreResult:
             lines.append(
                 f"  SP ERA (L5)       : {self.opposing_sp_era_l5:.2f}"
             )
+        if self.opposing_sp_fip_l5 is not None:
+            lines.append(
+                f"  SP FIP (L5)       : {self.opposing_sp_fip_l5:.2f}"
+            )
         if self.h2h_pa is not None and self.h2h_pa > 0:
             lines.append(
                 f"  H2H vs SP         : {self.h2h_pa} PA"
@@ -476,6 +532,7 @@ def compute_batter_score(
     *,
     sp_tbd: bool = False,
     team_proxy: bool = False,
+    pitcher_form_use_fip: bool = False,
 ) -> BatterScoreResult:
     weights = weights or Weights()
     rf_weights = rf_weights or RecentFormWeights()
@@ -498,6 +555,7 @@ def compute_batter_score(
         gates,
         sp_tbd=sp_tbd,
         team_proxy=team_proxy,
+        pitcher_form_use_fip=pitcher_form_use_fip,
     )
 
 
@@ -508,6 +566,7 @@ def compute_batter_score_partial(
     gates: ComponentGates = None,
     *,
     sp_tbd: bool = False,
+    pitcher_form_use_fip: bool = False,
 ) -> BatterScoreResult:
     """
     Phase A entry point: season baseline + recent form only.
@@ -522,6 +581,7 @@ def compute_batter_score_partial(
         rf_weights=rf_weights,
         gates=gates,
         sp_tbd=sp_tbd,
+        pitcher_form_use_fip=pitcher_form_use_fip,
     )
 
 
@@ -534,9 +594,10 @@ def compute_batter_score_phase_b(
     sp_tbd: bool = False,
     team_proxy: bool = False,
     proxy_weights: Weights = None,
+    pitcher_form_use_fip: bool = False,
 ) -> BatterScoreResult:
     """
-    Phase B entry point: season + form + pitcher form (ERA L5 + optional H2H).
+    Phase B entry point: season + form + pitcher form (ERA/FIP L5 + optional H2H).
 
     Matchup grade remains gated until Phase D arsenal data is available.
     """
@@ -558,6 +619,7 @@ def compute_batter_score_phase_b(
         gates=gates,
         sp_tbd=sp_tbd,
         team_proxy=team_proxy,
+        pitcher_form_use_fip=pitcher_form_use_fip,
     )
 
 
@@ -569,6 +631,7 @@ def compute_batter_score_phase_d(
     gates: ComponentGates = None,
     *,
     sp_tbd: bool = False,
+    pitcher_form_use_fip: bool = False,
 ) -> BatterScoreResult:
     """
     Phase D entry point: full composite with usage-weighted pitch-type matchup.
@@ -582,6 +645,7 @@ def compute_batter_score_phase_d(
         m_weights=m_weights,
         gates=gates,
         sp_tbd=sp_tbd,
+        pitcher_form_use_fip=pitcher_form_use_fip,
     )
 
 
@@ -594,6 +658,7 @@ def _compute_with_gates(
     *,
     sp_tbd: bool = False,
     team_proxy: bool = False,
+    pitcher_form_use_fip: bool = False,
 ) -> BatterScoreResult:
     gate_map = gates.as_dict()
     active_weight_map = renormalize_weights(weights, gates)
@@ -630,6 +695,7 @@ def _compute_with_gates(
         component_values["pitcher_form"] = pitcher_form_index(
             batter,
             use_team_proxy=team_proxy,
+            use_fip=pitcher_form_use_fip,
         )
         pitcher_form = component_values["pitcher_form"]
     else:
@@ -662,6 +728,7 @@ def _compute_with_gates(
         gated_components=gated_off,
         opposing_sp_name=batter.opposing_sp_name,
         opposing_sp_era_l5=batter.opponent_pitcher_era_l5,
+        opposing_sp_fip_l5=batter.opponent_pitcher_fip_l5,
         h2h_pa=batter.h2h_pa,
         h2h_avg_raw_points=batter.h2h_avg_raw_points,
         h2h_hits=batter.h2h_hits,

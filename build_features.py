@@ -1,4 +1,5 @@
 import argparse
+import re
 
 import numpy as np
 import pandas as pd
@@ -6,11 +7,22 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pybaseball import playerid_reverse_lookup
 
+from pitcher_stuff import (
+    add_pitcher_stuff_rolling_features,
+    build_pitcher_stuff_games,
+    merge_stuff_into_pitcher_games,
+)
 from utils import (
+    MLB_STATS_API,
     RAW_DIR,
     batter_features_path,
+    live_fetch_disabled,
     pitcher_features_path,
     normalize_version,
+)
+
+MLB_BOXSCORE_BATTING_PATH = (
+    RAW_DIR / "mlb_boxscore_batting.parquet"
 )
 
 
@@ -146,6 +158,287 @@ def normalize_player_name(
         )
 
     return name
+
+
+def derive_stolen_bases_from_des(
+    data: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Successful steals per batter/game from Statcast descriptions.
+
+    Pitch-level Statcast often omits ``stolen_base*`` events; steals appear in
+    ``des`` on the final pitch of the plate appearance. Attribute the runner
+    from base state (on_1b -> steal of 2nd, on_2b -> 3rd, on_3b -> home).
+    """
+    required = {
+        "game_date",
+        "game_pk",
+        "des",
+        "on_1b",
+        "on_2b",
+        "on_3b",
+    }
+    if data.empty or not required.issubset(data.columns):
+        return pd.DataFrame(
+            columns=[
+                "game_date",
+                "game_pk",
+                "batter",
+                "stolen_bases",
+            ]
+        )
+
+    des_rows = data.loc[
+        data["des"].notna()
+        & data["des"]
+        .astype(str)
+        .str.contains(" steals ", case=False, na=False)
+        & ~data["des"]
+        .astype(str)
+        .str.contains("caught stealing", case=False, na=False)
+    ].copy()
+
+    if des_rows.empty:
+        return pd.DataFrame(
+            columns=[
+                "game_date",
+                "game_pk",
+                "batter",
+                "stolen_bases",
+            ]
+        )
+
+    def _steal_runner(row) -> float | None:
+        tail = str(row["des"]).lower().split(" steals ", 1)[-1]
+
+        if re.search(r"\b2nd base\b", tail):
+            return row["on_1b"]
+        if re.search(r"\b3rd base\b", tail):
+            return row["on_2b"]
+        if re.search(r"\bhome\b", tail):
+            return row["on_3b"]
+
+        return None
+
+    des_rows["steal_runner"] = des_rows.apply(
+        _steal_runner,
+        axis=1,
+    )
+    des_rows = des_rows[
+        des_rows["steal_runner"].notna()
+    ].copy()
+
+    if des_rows.empty:
+        return pd.DataFrame(
+            columns=[
+                "game_date",
+                "game_pk",
+                "batter",
+                "stolen_bases",
+            ]
+        )
+
+    des_rows["batter"] = (
+        pd.to_numeric(
+            des_rows["steal_runner"],
+            errors="coerce",
+        )
+        .astype("Int64")
+    )
+    des_rows = des_rows[
+        des_rows["batter"].notna()
+    ].copy()
+
+    return (
+        des_rows.groupby(
+            [
+                "game_date",
+                "game_pk",
+                "batter",
+            ],
+            as_index=False,
+        )
+        .size()
+        .rename(
+            columns={
+                "size": "stolen_bases",
+            }
+        )
+    )
+
+
+def _fetch_boxscore_batting_rows(
+    game_pk: int,
+) -> list[dict]:
+    import requests
+
+    response = requests.get(
+        f"{MLB_STATS_API}/game/{int(game_pk)}/boxscore",
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    rows: list[dict] = []
+    for side in ("away", "home"):
+        players = payload.get("teams", {}).get(side, {}).get("players") or {}
+        for player_blob in players.values():
+            person = player_blob.get("person") or {}
+            batter = person.get("id")
+            stats = (
+                player_blob.get("stats") or {}
+            ).get("batting") or {}
+            if batter is None or not stats:
+                continue
+
+            rows.append(
+                {
+                    "game_pk": int(game_pk),
+                    "batter": int(batter),
+                    "stolen_bases": int(
+                        stats.get("stolenBases") or 0
+                    ),
+                    "hit_by_pitch": int(
+                        stats.get("hitByPitch") or 0
+                    ),
+                }
+            )
+
+    return rows
+
+
+def load_mlb_boxscore_batting_cache() -> pd.DataFrame:
+    if not MLB_BOXSCORE_BATTING_PATH.exists():
+        return pd.DataFrame(
+            columns=[
+                "game_pk",
+                "batter",
+                "stolen_bases",
+                "hit_by_pitch",
+            ]
+        )
+
+    cache = pd.read_parquet(
+        MLB_BOXSCORE_BATTING_PATH
+    )
+    return cache.drop_duplicates(
+        subset=["game_pk", "batter"],
+        keep="last",
+    )
+
+
+def build_mlb_boxscore_batting(
+    game_pks: list[int],
+) -> pd.DataFrame:
+    """Official SB/HBP per batter/game from MLB boxscores (cached)."""
+    if not game_pks:
+        return pd.DataFrame(
+            columns=[
+                "game_pk",
+                "batter",
+                "stolen_bases",
+                "hit_by_pitch",
+            ]
+        )
+
+    cache = load_mlb_boxscore_batting_cache()
+    needed = {
+        int(game_pk)
+        for game_pk in game_pks
+        if pd.notna(game_pk)
+    }
+    cached_pks = set()
+    if not cache.empty:
+        cached_pks = set(
+            cache["game_pk"]
+            .astype(int)
+            .unique()
+        )
+
+    missing = sorted(needed - cached_pks)
+    fetched: list[dict] = []
+
+    if missing and not live_fetch_disabled():
+        for game_pk in missing:
+            try:
+                fetched.extend(
+                    _fetch_boxscore_batting_rows(
+                        game_pk
+                    )
+                )
+            except Exception as exc:
+                print(
+                    f"Warning: MLB boxscore fetch failed "
+                    f"for game_pk={game_pk}: {exc}"
+                )
+
+    if fetched:
+        new_rows = pd.DataFrame(fetched)
+        cache = pd.concat(
+            [cache, new_rows],
+            ignore_index=True,
+        )
+        cache = cache.drop_duplicates(
+            subset=["game_pk", "batter"],
+            keep="last",
+        )
+        MLB_BOXSCORE_BATTING_PATH.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        cache.to_parquet(
+            MLB_BOXSCORE_BATTING_PATH,
+            index=False,
+        )
+
+    if cache.empty:
+        return cache
+
+    return cache[
+        cache["game_pk"]
+        .astype(int)
+        .isin(needed)
+    ].copy()
+
+
+def supplement_batter_games_from_mlb(
+    result: pd.DataFrame,
+) -> pd.DataFrame:
+    """Replace SB/HBP with official MLB boxscore totals when available."""
+    if result.empty or "game_pk" not in result.columns:
+        return result
+
+    supplement = build_mlb_boxscore_batting(
+        result["game_pk"]
+        .dropna()
+        .astype(int)
+        .unique()
+        .tolist()
+    )
+    if supplement.empty:
+        return result
+
+    merged = result.merge(
+        supplement,
+        on=["game_pk", "batter"],
+        how="left",
+        suffixes=("", "_mlb"),
+    )
+
+    for stat in ("stolen_bases", "hit_by_pitch"):
+        mlb_col = f"{stat}_mlb"
+        if mlb_col not in merged.columns:
+            continue
+
+        merged[stat] = (
+            merged[mlb_col]
+            .fillna(merged[stat])
+            .fillna(0)
+            .astype(int)
+        )
+        merged = merged.drop(columns=[mlb_col])
+
+    return merged
 
 
 def derive_scoring_runners(
@@ -358,6 +651,12 @@ def build_batter_games(
         .astype(int)
     )
 
+    data["hit_by_pitch"] = (
+        data["events"]
+        .eq("hit_by_pitch")
+        .astype(int)
+    )
+
     # -----------------------------------------------------
     # Batter name (Statcast player_name is the pitcher)
     # -----------------------------------------------------
@@ -465,7 +764,7 @@ def build_batter_games(
     data["away_team"] = data["away_team"]
 
     # -----------------------------------------------------
-    # Stolen bases (runner on steal events)
+    # Stolen bases (Statcast events + des/base-state fallback)
     # -----------------------------------------------------
 
     sb_mask = (
@@ -478,33 +777,61 @@ def build_batter_games(
         sb_mask
     ].copy()
 
-    if "runner" in sb_rows.columns:
-        sb_rows = sb_rows[
-            sb_rows["runner"].notna()
-        ]
-        sb_group_col = "runner"
+    sb_frames = []
+
+    if not sb_rows.empty:
+        if (
+            "runner" in sb_rows.columns
+            and sb_rows["runner"].notna().any()
+        ):
+            sb_group_col = "runner"
+        else:
+            sb_group_col = "batter"
+
+        sb_frames.append(
+            sb_rows.groupby(
+                [
+                    "game_date",
+                    "game_pk",
+                    sb_group_col,
+                ],
+                as_index=False,
+            )
+            .size()
+            .rename(
+                columns={
+                    sb_group_col: "batter",
+                    "size": "stolen_bases",
+                }
+            )
+        )
+
+    des_steals = derive_stolen_bases_from_des(data)
+    if not des_steals.empty:
+        sb_frames.append(des_steals)
+
+    if sb_frames:
+        stolen_by_runner = (
+            pd.concat(sb_frames, ignore_index=True)
+            .groupby(
+                [
+                    "game_date",
+                    "game_pk",
+                    "batter",
+                ],
+                as_index=False,
+            )["stolen_bases"]
+            .sum()
+        )
     else:
-        sb_group_col = "batter"
-
-    stolen_by_runner = (
-
-        sb_rows
-        .groupby(
-            [
+        stolen_by_runner = pd.DataFrame(
+            columns=[
                 "game_date",
                 "game_pk",
-                sb_group_col,
-            ],
-            as_index=False,
+                "batter",
+                "stolen_bases",
+            ]
         )
-        .size()
-        .rename(
-            columns={
-                sb_group_col: "batter",
-                "size": "stolen_bases",
-            }
-        )
-    )
 
     # -----------------------------------------------------
     # Aggregate
@@ -554,6 +881,11 @@ def build_batter_games(
                 "sum"
             ),
 
+            hit_by_pitch=(
+                "hit_by_pitch",
+                "sum"
+            ),
+
             plate_appearances=(
                 "events",
                 "count"
@@ -599,6 +931,14 @@ def build_batter_games(
         .astype(int)
     )
 
+    result["hit_by_pitch"] = (
+        result["hit_by_pitch"]
+        .fillna(0)
+        .astype(int)
+    )
+
+    result = supplement_batter_games_from_mlb(result)
+
     return result
 
 
@@ -639,6 +979,18 @@ def build_pitcher_games(
             "walk",
             "intent_walk"
         ])
+        .astype(int)
+    )
+
+    data["home_run_allowed"] = (
+        data["events"]
+        .eq("home_run")
+        .astype(int)
+    )
+
+    data["hit_by_pitch"] = (
+        data["events"]
+        .eq("hit_by_pitch")
         .astype(int)
     )
 
@@ -812,6 +1164,16 @@ def build_pitcher_games(
                 "sum"
             ),
 
+            home_runs_allowed=(
+                "home_run_allowed",
+                "sum"
+            ),
+
+            hit_by_pitch=(
+                "hit_by_pitch",
+                "sum"
+            ),
+
             hits_allowed=(
                 "hit_allowed",
                 "sum"
@@ -825,7 +1187,12 @@ def build_pitcher_games(
             earned_runs=(
                 "earned_runs_on_play",
                 "sum"
-            )
+            ),
+
+            batters_faced=(
+                "strikeout",
+                "count",
+            ),
         )
     )
 
@@ -962,6 +1329,23 @@ def build_all_features(
         statcast_df
     )
 
+    print(
+        "Building pitcher stuff metrics..."
+    )
+
+    stuff_games = build_pitcher_stuff_games(
+        statcast_df
+    )
+
+    pitchers = merge_stuff_into_pitcher_games(
+        pitchers,
+        stuff_games,
+    )
+
+    pitchers = add_pitcher_stuff_rolling_features(
+        pitchers
+    )
+
     # -----------------------------------------------------
     # Batter rolling stats (keep in sync with BATTER_FEATURES in train.py)
     # -----------------------------------------------------
@@ -992,9 +1376,12 @@ def build_all_features(
     pitcher_stats = [
         "strikeouts",
         "walks",
+        "home_runs_allowed",
+        "hit_by_pitch",
         "hits_allowed",
         "outs",
         "earned_runs",
+        "batters_faced",
     ]
 
     for stat in pitcher_stats:

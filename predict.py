@@ -18,10 +18,16 @@ from prop_scoring import (
     score_prop,
 )
 from distributional import (
+    apply_dist_edge_probabilities,
     load_distributional_model,
     market_supports_distributional,
     market_supports_dual_head,
+    market_uses_dist_edge_probabilities,
     score_distributional_prop,
+)
+from pitcher_strikeout_stuff import (
+    load_stuff_strikeout_model,
+    score_stuff_strikeout_prop,
 )
 from utils import (
     batter_features_path,
@@ -33,6 +39,7 @@ from utils import (
     warn_sp_prop_coverage,
 )
 from fetch_probables import warn_probables_slate_coverage
+from odds_api import EXCLUDED_LIVE_PROP_MARKETS
 
 
 def prepare_board(
@@ -83,6 +90,11 @@ def prepare_board(
     props = pd.read_parquet(
         props_path
     )
+
+    if "market" in props.columns:
+        props = props[
+            ~props["market"].isin(EXCLUDED_LIVE_PROP_MARKETS)
+        ].copy()
 
     batters = pd.read_parquet(
         batter_path
@@ -174,6 +186,10 @@ def generate_predictions(
         pitchers["player_name"]
         .dropna()
         .drop_duplicates()
+    )
+
+    stuff_package = load_stuff_strikeout_model(
+        version
     )
 
     # -----------------------------------------------------
@@ -290,12 +306,31 @@ def generate_predictions(
                     ] = dist_scores[
                         "over_probability"
                     ]
+                    if market_uses_dist_edge_probabilities(
+                        market
+                    ):
+                        scores = apply_dist_edge_probabilities(
+                            scores,
+                            dist_scores,
+                            prop,
+                        )
                 else:
                     scores[
                         "predicted_rate"
                     ] = dist_scores[
                         "predicted_count"
                     ]
+
+        if (
+            market == "pitcher_strikeouts"
+            and stuff_package is not None
+        ):
+            stuff_scores = score_stuff_strikeout_prop(
+                prop,
+                row,
+                stuff_package,
+            )
+            scores.update(stuff_scores)
 
         predictions.append({
 
@@ -461,6 +496,8 @@ def generate_predictions(
         "steam_flag",
         "predicted_count",
         "dist_over_probability",
+        "stuff_predicted_count",
+        "stuff_over_probability",
         "predicted_rate",
     ]
 

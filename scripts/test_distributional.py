@@ -15,9 +15,11 @@ sys.path.insert(0, str(ROOT))
 from distributional import (  # noqa: E402
     DISTRIBUTIONAL_MARKETS,
     DUAL_HEAD_MARKETS,
+    apply_dist_edge_probabilities,
     fit_rate_model,
     market_supports_dual_head,
     market_supports_distributional,
+    market_uses_dist_edge_probabilities,
     predict_rate,
     score_distributional_prop,
 )
@@ -100,11 +102,50 @@ def test_fit_and_score_returns_predicted_count() -> None:
     assert scores["model_probability"] == scores["over_probability"]
 
 
+def test_walks_use_dist_edge_probabilities() -> None:
+    assert market_uses_dist_edge_probabilities("pitcher_walks")
+    assert not market_uses_dist_edge_probabilities("pitcher_strikeouts")
+
+    clf_scores = {
+        "over_probability": 0.21,
+        "under_probability": 0.79,
+        "model_probability": 0.79,
+        "raw_model_probability": 0.66,
+        "edge": 0.30,
+        "ev": 0.25,
+    }
+    dist_scores = {
+        "over_probability": 0.68,
+        "under_probability": 0.32,
+        "model_probability": 0.68,
+        "predicted_count": 2.35,
+    }
+    prop = pd.Series({
+        "line": 1.5,
+        "side": "over",
+        "odds": -110,
+        "market": "pitcher_walks",
+    })
+
+    updated = apply_dist_edge_probabilities(
+        clf_scores,
+        dist_scores,
+        prop,
+    )
+
+    assert updated["clf_over_probability"] == 0.21
+    assert updated["over_probability"] == 0.68
+    assert updated["model_probability"] == 0.68
+    assert updated["dist_over_probability"] == 0.68
+    assert updated["edge"] != clf_scores["edge"]
+
+
 def main() -> int:
     test_pitcher_walks_in_distributional_markets()
     test_dual_head_markets_include_pitcher_outs()
     test_distributional_model_path_convention()
     test_fit_and_score_returns_predicted_count()
+    test_walks_use_dist_edge_probabilities()
     print("Distributional Phase 1 tests passed")
     return 0
 

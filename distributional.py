@@ -50,6 +50,13 @@ DUAL_HEAD_MARKETS = frozenset({
     "pitcher_outs",
 })
 
+# Walks classifier + isotonic calibrator are miscalibrated in the 0.45–0.75 raw
+# P(Over) range (backtest actual rates ~17–28% vs ~60% raw). Use Poisson P(Over)
+# for board Over/Under %, edge, and EV when the dist model exists.
+DIST_EDGE_PROBABILITY_MARKETS = frozenset({
+    "pitcher_walks",
+})
+
 
 def distributional_model_path(
     market: str,
@@ -249,6 +256,49 @@ def score_distributional_prop(
         "model_probability": model_probability,
         "distribution": "poisson",
     }
+
+
+def market_uses_dist_edge_probabilities(market: str) -> bool:
+    return market in DIST_EDGE_PROBABILITY_MARKETS
+
+
+def apply_dist_edge_probabilities(
+    scores: dict,
+    dist_scores: dict,
+    prop: dict | pd.Series,
+) -> dict:
+    """
+    Replace Over/Under/model probability and edge/EV with Poisson-head values.
+
+    Preserves classifier outputs in ``clf_over_probability`` /
+    ``clf_under_probability`` for comparison.
+    """
+    from utils import (
+        american_to_implied_probability,
+        expected_value,
+    )
+
+    updated = dict(scores)
+    updated["clf_over_probability"] = scores.get("over_probability")
+    updated["clf_under_probability"] = scores.get("under_probability")
+    updated["over_probability"] = dist_scores["over_probability"]
+    updated["under_probability"] = dist_scores["under_probability"]
+    updated["dist_over_probability"] = dist_scores["over_probability"]
+    updated["model_probability"] = dist_scores["model_probability"]
+    updated["calibrated_probability"] = dist_scores["model_probability"]
+
+    market_probability = american_to_implied_probability(
+        prop["odds"],
+    )
+    updated["market_probability"] = market_probability
+    updated["edge"] = (
+        updated["model_probability"] - market_probability
+    )
+    updated["ev"] = expected_value(
+        updated["model_probability"],
+        prop["odds"],
+    )
+    return updated
 
 
 def market_supports_distributional(

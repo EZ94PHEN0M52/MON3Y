@@ -1,5 +1,6 @@
 """Main prop board for the MLB Prop Model UI."""
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -17,10 +18,11 @@ from ui.formatting import (
 )
 from ui.glossary import EDGE_CALLOUT, GLOSSARY
 from ui.formatting import market_label
+from pitcher_strikeout_stuff import format_stuff_strikeout_display
 from ui.market_filters import render_market_multiselect
-from ui.batter_score_board import (
-    render_game_batter_scores,
-    render_top_batter_scores,
+from ui.main_bottom_boards import (
+    render_hot_batter_score_board,
+    render_market_top_props_board,
 )
 from ui.pick_builder import render_board_add_controls
 from ui.player_stats import lookup_player_hand_for_market
@@ -44,6 +46,7 @@ BOARD_TABLE_COLUMNS = [
     "calibrated_probability",
     "predicted_count",
     "dist_over_probability",
+    "stuff_strikeout_display",
     "market_probability",
     "devigged_market_prob",
     "l5_l10_pct",
@@ -112,6 +115,12 @@ BASE_HEADER_SPECS = [
         "field": "dist_over_probability",
         "filter": "min_pct",
         "glossary": "dist_over_probability",
+    },
+    {
+        "label": "Stuff K (v2)",
+        "field": "stuff_strikeout_display",
+        "filter": "text",
+        "glossary": "stuff_strikeout_v2",
     },
     {"label": "Market %", "field": "market_probability", "filter": "min_pct"},
     {
@@ -821,6 +830,10 @@ def _board_column_config(extra_stat_columns):
             help=GLOSSARY["dist_over_probability"],
             format="%.1f",
         ),
+        "stuff_strikeout_display": st.column_config.TextColumn(
+            "Stuff K (v2)",
+            help=GLOSSARY["stuff_strikeout_v2"],
+        ),
         "market_probability": st.column_config.NumberColumn(
             "Market %",
             help=GLOSSARY["market_pct"],
@@ -948,6 +961,32 @@ def _prepare_board_table_df(filtered, version="v2"):
                     "batter_score_label",
                     pd.Series([""] * len(filtered)),
                 ),
+            )
+        ]
+
+    if (
+        "stuff_predicted_count" in filtered.columns
+        or "stuff_over_probability" in filtered.columns
+    ):
+        pred = filtered.get(
+            "stuff_predicted_count",
+            pd.Series([np.nan] * len(filtered)),
+        )
+        over = filtered.get(
+            "stuff_over_probability",
+            pd.Series([np.nan] * len(filtered)),
+        )
+        display["stuff_strikeout_display"] = [
+            format_stuff_strikeout_display(
+                predicted,
+                over_prob,
+            )
+            if market == "pitcher_strikeouts"
+            else "—"
+            for predicted, over_prob, market in zip(
+                pred,
+                over,
+                filtered["market"],
             )
         ]
 
@@ -1241,11 +1280,22 @@ def render_board(df, version):
             render_board_add_controls(header_filtered, key_prefix)
         else:
             st.info("No props meet the current column filters.")
+
+        st.divider()
+        render_market_top_props_board(
+            filtered,
+            key_prefix,
+            version=version,
+        )
     else:
         st.info("No props meet the current filters.")
 
-    render_top_batter_scores(df, key_prefix, version=version)
-    render_game_batter_scores(df, key_prefix, version=version)
+    st.divider()
+    render_hot_batter_score_board(
+        df,
+        key_prefix,
+        version=version,
+    )
 
     st.divider()
     st.caption(EDGE_CALLOUT)

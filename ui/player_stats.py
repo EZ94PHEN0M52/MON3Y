@@ -452,26 +452,10 @@ def _format_l5_l10_pct(l5_pct, l10_pct):
 
 
 def prizepicks_fantasy_score(row) -> float:
-    """
-    PrizePicks MLB hitter fantasy score from box-score stats.
+    """PrizePicks MLB hitter fantasy score (official chart from box stats)."""
+    from pp_fantasy_scores import compute_pp_fantasy_score_from_row
 
-    Uses singles/doubles/triples split implied by hits + total bases (exact
-    when the player had no triples; HBP omitted — not in feature parquets).
-    """
-    hits = int(row.get("hits", 0) or 0)
-    home_runs = int(row.get("home_runs", 0) or 0)
-    total_bases = float(row.get("total_bases", 0) or 0)
-    runs = int(row.get("runs", 0) or 0)
-    rbi = int(row.get("rbi", 0) or 0)
-    walks = int(row.get("walks", 0) or 0)
-    stolen_bases = int(row.get("stolen_bases", 0) or 0)
-
-    hit_points = hits + (2 * total_bases) + home_runs
-    return float(
-        hit_points
-        + (2 * (runs + rbi + walks))
-        + (5 * stolen_bases)
-    )
+    return compute_pp_fantasy_score_from_row(row)
 
 
 def _pp_lines_cache_key():
@@ -568,24 +552,14 @@ def format_underdog_fantasy_line(player_name) -> str:
 
 
 def rolling_pp_fantasy_over_rates(player_name, line, version="v2"):
-    """L5/L10 over-rates vs a PrizePicks fantasy score line."""
-    cache = _kind_player_game_cache(
-        _kind_player_cache_key("batter", version)
-    )
-    if not cache:
+    """L5/L10 over-rates vs a PrizePicks fantasy score line (from PP archive)."""
+    from pp_fantasy_scores import player_pp_fantasy_score_values
+
+    values = player_pp_fantasy_score_values(player_name, version=version)
+    if not values:
         return np.nan, np.nan
 
-    player_key = _fuzzy_player_key(player_name, cache.keys())
-    if player_key is None:
-        return np.nan, np.nan
-
-    player_games = cache[player_key].sort_values("game_date")
-    values = [
-        prizepicks_fantasy_score(row)
-        for _, row in player_games.iterrows()
-    ]
     line = float(line)
-
     return (
         _over_rate(values, line, 5),
         _over_rate(values, line, 10),

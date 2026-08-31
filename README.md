@@ -5,9 +5,42 @@
 - **GitHub:** [EZ94PHEN0M52/MON3Y](https://github.com/EZ94PHEN0M52/MON3Y) — tags **`v1`**, **`v2`**, **`v3`** mark frozen baselines; active development is on **`main`**
 - **Frozen local copies:** [`mlb-prop-model-v1/`](../mlb-prop-model-v1), [`mlb-prop-model-v2/`](../mlb-prop-model-v2), [`mlb-prop-model-v3/`](../mlb-prop-model-v3/)
 
-**Table of contents:** [Quick start](#quick-start-for-beginners) · [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Pitcher outs learning](#pitcher-outs-learning-loop-track-1) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
+**Table of contents:** [Quick notes](#quick-notes) · [Quick start](#quick-start-for-beginners) · [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Official lineups (pre-game)](#official-rotowire-lineups-pre-game) · [Stuff strikeout model (v2)](#stuff-strikeout-model-v2) · [Pitcher outs learning](#pitcher-outs-learning-loop-track-1) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
 
-> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder, PP/Underdog fantasy boards, **Hitter's Life**). For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
+> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder, PP/Underdog fantasy boards, **Hitter's Life**). **Stuff K (v2)** (Statcast SwStr/chase/velocity strikeout column) needs a one-time **`./run_pitcher_strikeout_stuff.sh`** — then daily predict picks it up automatically. Close to first pitch, run **`./run_official_lineups.sh`** so the [Hitter's Life](#hitters-life-board) lineup filter uses Rotowire **Today's Lineup** (official) instead of default vs RHP/LHP. For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
+
+---
+
+## Quick notes
+
+### `run_daily.sh` vs `run_pitcher_outs_learning.sh`
+
+- **`./run_pitcher_outs_learning.sh` already runs `./run_daily.sh` as Step 1** (features + predict), then joins outcomes, retrains pitcher K / walks / outs models, and runs `predict.py` again. You usually do **not** need both scripts in one session unless you want a specific order (see below).
+- **Props fetch / Odds API credits:** the learning script’s embedded daily pass passes **`--skip-props` by default** — it uses cached `data/processed/current_props.parquet` and does **not** spend Odds API tokens on props. To refresh props inside the learning loop, run **`./run_pitcher_outs_learning.sh --fetch-props`** (or run `./run_daily.sh` first, then learning with `--skip-daily`).
+- **What the default learning run still fetches:** game lines and probables (MLB Stats API / non-Odds-API paths) unless you pass `--skip-game-lines` or `--skip-probables` to the learning script.
+- **Do not run both scripts at the same time** — they share feature parquets, `predictions_v2.csv`, and learning logs with no file locking; parallel runs can corrupt or overwrite outputs.
+- **Recommended patterns:**
+  - **Learning only (usual):** `./run_pitcher_outs_learning.sh`
+  - **Fresh props, then retrain:** `./run_daily.sh` → wait for finish → `./run_pitcher_outs_learning.sh --skip-daily`
+  - **Daily board refresh only:** `./run_daily.sh`
+
+See also [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) and [Pitcher outs learning loop (Track 1)](#pitcher-outs-learning-loop-track-1).
+
+### Stuff K (v2) vs main pitcher strikeouts model
+
+- **Main board Model % / Edge / EV** still come from **`pitcher_strikeouts.pkl`** (LightGBM on rolling box-score stats). That path is unchanged by Stuff K v2.
+- **Stuff K (v2)** is a **separate** Statcast process model (`models/v2/pitcher_strikeouts_stuff.pkl`): SwStr%, chase%, velocity → K% → Poisson expected K and Over %. Shown in the **Stuff K (v2)** column on strikeout rows only — same idea as **Batter Score v2** sitting beside v1.
+- **`./run_daily.sh`** scores Stuff K v2 **only if** the stuff model file already exists. It does **not** train that model. First-time or after a big Statcast refresh, run **`./run_pitcher_strikeout_stuff.sh`** once (features → fit → predict). See [Stuff strikeout model (v2)](#stuff-strikeout-model-v2).
+
+### Historical Statcast for H2H / wOBA
+
+Career **H2H vs SP**, **pitch-type wOBA**, and **Arsenal wOBA** on Hitter's Life merge **every** `data/raw/statcast_*.parquet` shard (not just the current-season file from `./run_daily.sh`). To backfill a prior season:
+
+```bash
+python scripts/fetch_statcast_history.py --season 2024
+```
+
+That saves `statcast_2024-03-28_2024-09-29.parquet` (~full 2024 regular season). Restart Streamlit after download. One-time fetch; not part of the daily pipeline.
 
 ---
 
@@ -33,7 +66,7 @@ The pipeline does four things:
 | **V1** | Rolling form only (simple baseline) |
 | **V2** | + opponent, handedness, park |
 | **V3** | + Phases 1–6 (historical odds, multi-book, calibration, Batter Score, Pick Builder) — frozen at git tag **`v3`** |
-| **Main** | Today’s active code in this folder — same models as V3 plus post-v3 upgrades (dual-head pitcher K/walks/outs, Track 1 K/walks/outs learning, **validated** Batter Score + **Batter Score v2** (Savant pitch-type matchup), **Hitter's Life** batting board, **Batter Score Pick Builder**, PrizePicks/Underdog fantasy lines on batter score boards, Rotowire lineup filter, Top Over/Under **Game & time** + L5/L10 %, player stat **H2H** filter, bat/throw **(L)/(R)** labels) |
+| **Main** | Today’s active code in this folder — same models as V3 plus post-v3 upgrades (dual-head pitcher K/walks/outs, Track 1 K/walks/outs learning, **validated** Batter Score + **Batter Score v2** (Savant pitch-type matchup), **Stuff K (v2)** strikeout model (SwStr/chase/velocity), **Hitter's Life** batting board, **official Rotowire lineups** (`./run_official_lineups.sh`), **Batter Score Pick Builder**, PrizePicks/Underdog fantasy lines on batter score boards, Rotowire lineup filter, Top Over/Under **Game & time** + L5/L10 %, player stat **H2H** filter, bat/throw **(L)/(R)** labels) |
 
 **Version compare** puts all four generations side-by-side on one table so you can see how **Over %** and **Under %** differ for the same player and market.
 
@@ -99,7 +132,7 @@ DISABLE_LIVE_FETCH=1 python predict.py --start 2026-03-25 --end 2026-08-16 --ver
 
 | Path | When to use | First-time setup |
 |------|-------------|------------------|
-| **This folder (main)** | Active dev — Batter Score, Pick Builder, dual-head K/walks | [First-time setup](#first-time-setup-from-zero) |
+| **This folder (main)** | Active dev — Batter Score, Pick Builder, dual-head K/walks, **Stuff K v2** | [First-time setup](#first-time-setup-from-zero) |
 | **Frozen folder `mlb-prop-model-v2/`** | Pre–Phases 1–6 snapshot (git tag **`v2`**) | [Standalone v2 setup](#standalone-v2-setup-legacy-baseline) |
 | **Frozen folder `mlb-prop-model-v3/`** | Phases 1–6 frozen at tag **`v3`** | [Standalone v3 setup](#standalone-v3-setup-recommended-frozen-copy) |
 
@@ -112,7 +145,27 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 ./run_daily.sh --skip-props         # reuse cached current_props.parquet only
 ```
 
-**Recommended rhythm:** evening fetch when props post, morning `--skip-props` for fresh Statcast — see [Step A → Recommended daily rhythm](#step-a--v2--main-daily-pipeline) and [Shell scripts walkthrough](#shell-scripts--quick-walkthrough).
+**First-time Stuff K (v2) column** (after clone or before first board with Statcast stuff metrics):
+
+```bash
+./run_pitcher_strikeout_stuff.sh --streamlit   # build stuff features → train stuff model → predict → board
+```
+
+Later daily runs only need `./run_daily.sh` — it re-scores Stuff K v2 when `models/v2/pitcher_strikeouts_stuff.pkl` exists. Re-run the stuff script after a long Statcast gap or when [`pitcher_stuff.py`](pitcher_stuff.py) changes. See [Stuff strikeout model (v2)](#stuff-strikeout-model-v2).
+
+**Recommended rhythm:** evening fetch when props post, morning `--skip-props` for fresh Statcast, **pre-game** official lineups for Hitter's Life — see [Step A → Recommended daily rhythm](#step-a--v2--main-daily-pipeline), [Official lineups (pre-game)](#official-rotowire-lineups-pre-game), and [Shell scripts walkthrough](#shell-scripts--quick-walkthrough).
+
+**Pre-game lineups (Hitter's Life only — optional, ~1–2 hours before first pitch):**
+
+Rotowire posts confirmed batting orders under **Today's Lineup** on each team page. Default orders (vs RHP/LHP) load automatically the first time you use the [Hitter's Life](#hitters-life-board) lineup filter; run this when you want **official** 1–9 orders instead:
+
+```bash
+./run_official_lineups.sh              # fetch Today's Lineup for all slate teams → rotowire_lineups.parquet
+./run_official_lineups.sh --dry-run    # validate only, no cache write
+./run_official_lineups.sh --watch 300  # poll every 5 min until lineups post (Ctrl+C to stop)
+```
+
+Then **reload Streamlit** (or refresh the page). On Hitter's Life, pick one **Game**, open **Lineup filter** — the caption shows **Today's Lineup** per team when cached, otherwise **default vs {SP hand}**. Does **not** change prop edge/EV or Batter Score math.
 
 **Streamlit:** Sidebar **Model version** defaults to **`v2`**. Board, Pick Builder, Batter Score, and market filters use `predictions_v2.csv`. **Version compare** adds V3 (manual CSV copy) and Main (same file as V2 today).
 
@@ -251,6 +304,7 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 |------|---------|-----|
 | **Evening** (~8pm PT, props live) | `./run_daily.sh --streamlit` | Fresh props, game lines, and probables for **tomorrow’s slate**; scores the board. Do **not** use `--skip-props` or `--skip-probables` — you want new lines and SP names. |
 | **Next morning** (Statcast posted) | `./run_daily.sh --skip-props --streamlit` | Refreshes rolling stats through **calendar yesterday** without overwriting last night’s pre-game lines. |
+| **Pre-game** (~1–2 hr before first pitch) | `./run_official_lineups.sh` | Pulls Rotowire **Today's Lineup** for slate teams → [Hitter's Life](#hitters-life-board) lineup filter uses official 1–9 order (see [Official lineups](#official-rotowire-lineups-pre-game)). Reload Streamlit after. |
 
 **What lines up correctly on the evening run:**
 
@@ -258,7 +312,8 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 - **SP props** (`pitcher_strikeouts`, walks, hits allowed, outs) — scored when books post them.
 - **Probables** — fetched for every **Eastern slate date** in `current_props.parquet` (feeds Batter Score opposing-SP lookup).
 - **Fantasy lines** — PrizePicks (`prizepicks_fantasy_lines.parquet`) and Underdog (`underdog_fantasy_lines.parquet`) refresh on every successful `--props` pass (feeds [batter score boards](#batter-score)).
-- **Over % / Edge / EV** — computed at predict time from each player’s latest feature row.
+- **Over % / Edge / EV** — computed at predict time from each player’s latest feature row (main LightGBM classifiers).
+- **Stuff K (v2)** — on **Pitcher Strikeouts** rows only, if `models/v2/pitcher_strikeouts_stuff.pkl` exists; shows expected K and Poisson Over % from Statcast SwStr/chase/velocity (does **not** change Edge/EV). First-time setup: [`./run_pitcher_strikeout_stuff.sh`](#run_pitcher_strikeout_stuffsh--stuff-k-v2-pipeline).
 
 **One timing caveat:** `run_daily.sh` uses `YESTERDAY=$(date -v-1d)` for features. On an **evening** run, that is still **calendar yesterday**, so today’s just-finished box scores are **not** in rolling stats yet — the board is correct for tomorrow’s lines, but L5/L10 and model form are **one slate behind** until the morning pass. Check the player page caption **Game logs through YYYY-MM-DD** to confirm feature freshness.
 
@@ -278,6 +333,7 @@ data/processed/current_game_lines.parquet
 data/processed/daily_probables.parquet
 data/predictions/predictions_v2.csv
 models/v2/*.pkl                    # at least one market model
+models/v2/pitcher_strikeouts_stuff.pkl   # optional — Stuff K (v2) column; create via ./run_pitcher_strikeout_stuff.sh
 ```
 
 **If `./run_daily.sh` fails:**
@@ -383,15 +439,17 @@ For implementation details (merge keys, dedupe, slot config), see [Version compa
 
 ## Shell scripts — quick walkthrough
 
-Three bash entry points wrap the Python pipeline. Run them from the project root (`./script.sh`, not bare `script.sh` on zsh). Each auto-activates `.venv`.
+Five bash entry points wrap the Python pipeline. Run them from the project root (`./script.sh`, not bare `script.sh` on zsh). Each auto-activates `.venv`.
 
 **Typical season schedule:**
 
 ```text
-Evening (props post)      →  ./run_daily.sh --streamlit
-Next morning (fresh form)   →  ./run_daily.sh --skip-props --streamlit
-Weekly / after backfill   →  ./run_evaluation.sh
-Optional (outs learning)  →  ./run_pitcher_outs_learning.sh
+Evening (props post)        →  ./run_daily.sh --streamlit
+Next morning (fresh form)     →  ./run_daily.sh --skip-props --streamlit
+Pre-game (official lineups)   →  ./run_official_lineups.sh   # then reload Streamlit
+First-time / refresh Stuff K  →  ./run_pitcher_strikeout_stuff.sh   # then daily only
+Weekly / after backfill     →  ./run_evaluation.sh
+Optional (outs learning)    →  ./run_pitcher_outs_learning.sh
 ```
 
 Full flag tables live in [Command reference](#command-reference). This section is the **order-of-operations cheat sheet**.
@@ -501,6 +559,69 @@ Full flag tables live in [Command reference](#command-reference). This section i
 
 ---
 
+### 4. `./run_pitcher_strikeout_stuff.sh` — Stuff K (v2) pipeline
+
+**Purpose:** Build Statcast **stuff** columns in pitcher feature parquets, train the **separate** SwStr/chase/velocity strikeout model, and re-predict so the board **Stuff K (v2)** column populates on strikeout props.
+
+**When:** **First time** after clone, after [`pitcher_stuff.py`](pitcher_stuff.py) / stuff-metric fixes, or when the stuff model is missing. **Not** required every game day — `./run_daily.sh` re-scores existing stuff predictions automatically.
+
+```bash
+./run_pitcher_strikeout_stuff.sh [--skip-features] [--skip-fit] [--skip-predict] [--streamlit] [--start DATE] [--end DATE]
+```
+
+| Step | What runs | Skipped by |
+|------|-----------|------------|
+| 1 | `scripts/ensure_features.py --fix` — fetch Statcast if missing/stale, rebuild pitcher stuff columns | `--skip-features` |
+| 2 | `scripts/fit_pitcher_strikeout_stuff.py` → `models/v2/pitcher_strikeouts_stuff.pkl` | `--skip-fit` |
+| 3 | `predict.py` — writes `stuff_predicted_count` / `stuff_over_probability` to CSV | `--skip-predict` |
+
+| Flag | Meaning |
+|------|---------|
+| `--skip-features` | Parquet already rebuilt (e.g. morning `./run_daily.sh` just ran `ensure_features --fix`) |
+| `--skip-fit` | Model already trained; only re-predict |
+| `--streamlit` | Open board after predict |
+
+**Does not:** change main **Model %** / **Edge** / **EV** (still `pitcher_strikeouts.pkl`). Does **not** fetch props — run `./run_daily.sh` first if `current_props.parquet` is stale.
+
+Full detail: [Stuff strikeout model (v2)](#stuff-strikeout-model-v2) · [Command reference → run_pitcher_strikeout_stuff.sh](#run_pitcher_strikeout_stuffsh--stuff-k-v2-pipeline)
+
+---
+
+### 5. `./run_official_lineups.sh` — pre-game (Hitter's Life lineups)
+
+**Purpose:** Fetch Rotowire **Today's Lineup** for today's slate teams and merge **OFFICIAL** rows into `data/processed/rotowire_lineups.parquet`. The [Hitter's Life](#hitters-life-board) lineup filter prefers these over default vs RHP/LHP when cached.
+
+**When:** **~1–2 hours before first pitch** (or poll with `--watch` until Rotowire posts). Requires a prior `./run_daily.sh` so `current_props.parquet` lists slate teams. **Does not** re-run predict or change prop edge/EV.
+
+```bash
+./run_official_lineups.sh [--dry-run] [--teams ABBR,...] [--watch SECONDS] [--max-runs N] [python flags…]
+```
+
+| Step | What runs |
+|------|-----------|
+| 1 | Resolve slate teams from `current_props.parquet` (or `--teams`) |
+| 2 | `scripts/update_official_lineups.py` — fetch each team's Rotowire batting-orders page, parse **Today's Lineup** |
+| 3 | Validate (8–10 batters, no dupes, slate overlap) — skip if not posted yet |
+| 4 | Backup parquet → atomic write to `rotowire_lineups.parquet` |
+
+| Flag | Meaning |
+|------|---------|
+| *(none)* | Update all slate teams; 2 fetch retries per team |
+| `--dry-run` | Fetch + validate only; no cache write |
+| `--teams NYY,BOS,…` | Limit to specific Rotowire codes (skip props lookup) |
+| `--watch 300` | Poll every 300s until Ctrl+C (optional `--max-runs N`) |
+| `--min-players` / `--max-players` | Lineup size bounds (default 8–10) |
+| `--skip-slate-check` | Disable cross-check vs prop slate |
+| `--no-backup` | Skip timestamped `.bak.parquet` before write |
+
+**After success:** reload Streamlit (or refresh the browser). On Hitter's Life → pick a **Game** → **Lineup filter** caption shows **Today's Lineup** when official rows exist.
+
+**Safety (built-in):** skips empty/unposted lineups; never deletes default RHP/LHP rows; unchanged lineups skip write; `DISABLE_LIVE_FETCH=1` blocked in shell script.
+
+Full detail: [Official Rotowire lineups (pre-game)](#official-rotowire-lineups-pre-game) · [Command reference → run_official_lineups.sh](#run_official_lineupssh--pre-game-lineups)
+
+---
+
 ## Version compare (V1 / V2 / V3 / Main)
 
 Side-by-side **Over %** and **Under %** for the same player and market across project generations. Implementation: [`ui/version_compare.py`](ui/version_compare.py); slot definitions in [`utils.py`](utils.py) (`VERSION_COMPARE_SLOTS`).
@@ -542,7 +663,7 @@ cp ../mlb-prop-model-v3/data/predictions/predictions_v2.csv \
 | **Git tag** | `v1` | `v2` | `v3` | — (branch **`main`** on [MON3Y](https://github.com/EZ94PHEN0M52/MON3Y)) |
 | **Player features** | Rolling L3/L5/L10/L20/season | + opponent, handedness, park | + game lines, stolen bases | Same as V3 |
 | **Odds pipeline** | Live props only | Live props only | Phases 1–6 (history, multi-book, movement, calibration) | Same as V3 |
-| **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 + fantasy-line batter score boards, **Hitter's Life** board, **Batter Score v2**, **Batter Score Pick Builder**, ranking-table Game & time, conditional cell highlights, H2H stat history, Rotowire lineup filter |
+| **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 + fantasy-line batter score boards, **Hitter's Life** board, **official Rotowire lineups** script, **Batter Score v2**, **Batter Score Pick Builder**, ranking-table Game & time, conditional cell highlights, H2H stat history, Rotowire lineup filter |
 | **Models** | `models/*.pkl` | `models/v1/`, `models/v2/` | `models/v2/` + calibrators + dist | Same as V3 |
 | **Predictions** | `predictions.csv` | `predictions_v2.csv` | `predictions_v2.csv` + `_best.csv` | Same as V3 |
 | **Default CLI** | N/A | `--version v2` | `--version v2` | `--version v2` |
@@ -625,7 +746,7 @@ All inference, UI, and backtest paths read **local parquets and CSVs** first. Li
 | Directory | Contents |
 |-----------|----------|
 | **`data/raw/`** | Statcast pitch-level (`statcast_{start}_{end}.parquet`), historical odds partitions (`odds/historical/date=…/`), intraday prop snapshots (`odds/snapshots/`) |
-| **`data/processed/`** | Batter/pitcher feature parquets, `current_props.parquet`, `current_game_lines.parquet`, `daily_probables.parquet`, `prizepicks_fantasy_lines.parquet`, `underdog_fantasy_lines.parquet`, `rotowire_lineups.parquet` (cached on first Hitter's Life lineup filter) |
+| **`data/processed/`** | Batter/pitcher feature parquets, `current_props.parquet`, `current_game_lines.parquet`, `daily_probables.parquet`, `prizepicks_fantasy_lines.parquet`, `underdog_fantasy_lines.parquet`, `rotowire_lineups.parquet` (default RHP/LHP on first Hitter's Life use; **OFFICIAL** rows from [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game)) |
 | **`data/predictions/`** | `predictions_v2.csv`, `predictions_v2_best.csv` (written by `predict.py`; read by Streamlit) |
 | **`data/backtest/`** | Backtest CSVs and `batter_score_validation.json` |
 
@@ -644,6 +765,7 @@ Downstream code must not call pybaseball, the Odds API, or the MLB Stats API dir
 | `fetch_data.py --probables` | MLB Stats API (via `fetch_probables.py`) | `data/processed/daily_probables.parquet` |
 | `fetch_probables.py` | MLB Stats API | same probables parquet |
 | `fetch_historical_odds.py` | Odds API | `data/raw/odds/historical/date=…/` |
+| [`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) | Rotowire batting-orders HTML | `rotowire_lineups.parquet` (defaults on demand; **OFFICIAL** via [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game)) |
 | `odds_api.py` | Odds API | used by fetch scripts only — not imported by inference |
 
 **Read-only paths** (parquet/CSV + models only; zero network):
@@ -724,6 +846,8 @@ Historical odds backfill (`fetch_historical_odds.py`) and evaluation ([`./run_ev
 Post-v3 upgrade for count markets **`pitcher_strikeouts`**, **`pitcher_walks`**, and **`pitcher_outs`**: a lightweight **dual-head** — existing LightGBM **classifier** (beat the line?) plus a Poisson **regressor** (expected count μ). Classifier probability remains the source of truth for **edge** and **EV**; regressor outputs (`predicted_count`, `dist_over_probability`) appear on the board for context. Inference: [`predict.py`](predict.py) (`DUAL_HEAD_MARKETS` in [`distributional.py`](distributional.py)). Training: [`scripts/fit_distributional.py`](scripts/fit_distributional.py) → `models/v2/dist/{market}.pkl` (via [`./run_evaluation.sh`](#evaluation-pipeline-phase-6) or [`./run_pitcher_outs_learning.sh --fit-distributional`](#pitcher-outs-learning-loop-track-1)). A 50/50 classifier+regressor probability blend is deferred — see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 **Track 1 self-learning** for pitcher K / walks / outs (log → join outcomes → retrain) is documented in [Pitcher count-market learning loop](#pitcher-outs-learning-loop-track-1).
+
+**Stuff K (v2)** is a **third**, independent strikeout path — Statcast SwStr/chase/velocity, not dual-head and not the main classifier. See [Stuff strikeout model (v2)](#stuff-strikeout-model-v2).
 
 ---
 
@@ -981,8 +1105,9 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 
 - **[Main board](#main-board-apppy--uiboardpy)** — sortable **Batter Score** column with labels **Full** / **Partial** / **Partial · SP TBD** / **Form only** (glossary tooltip); player names show **(L)/(R)** bat/throw hand when known
 - **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter). Columns: Player, **Game & time**, Opposing SP **(L)/(R)**, Vs pitcher, **PP fantasy**, **UD fantasy**, **L5 / L10 %** (vs PP line), **Batter score**, **Batter score v2**. **Conditional highlights:** orange **UD fantasy** when Underdog line &lt; PrizePicks; sky blue when PP = UD; light green **Vs pitcher** when H2H AVG &gt; .300; yellow/green **L5 / L10 %** when L5 ≥ 80% with L10 below/above 80%; red row outline when UD lower + L5/L10 green
-- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** — same columns and highlights as Top 10 for **all** slate batters; **Game** selectbox filters to one matchup; **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
-- **[Hitter's Life](#hitters-life-board)** (`?view=hitters_life`) — batting-context board: Vs SP (name + H2H), **Arsenal wOBA**, season/L5/L10 AVG, pitch-type wOBA selector, **SP arsenal** (Savant pitch names), TB game log; Rotowire lineup filter when a game is selected
+- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** (Hitter's Life) — **all** slate batters with Top 10 PP/UD/L5-L10/Vs pitcher columns and highlights, plus **Batting average** (Szn / L5 / L10) and **TB per game (L5)** with the same color rules as the [Batting average board](#hitters-life-board); **Game** selectbox above the table filters to one matchup (no **Game & time** column); **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
+- **[Main board → Hot batters — batter score](#main-board-apppy--uiboardpy)** — top **20** Batter Scores among hitters in the top **15** L5 batting averages **and** a Hitter's Life batting-AVG highlight (green / orange / yellow); includes **Batting average**, **TB per game (L5)**, and PP/UD/L5-L10/Vs pitcher columns with independent color rules; tie-break favors blue TB soarer then AVG color ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
+- **[Hitter's Life](#hitters-life-board)** (`?view=hitters_life`) — batting-context board: Vs SP (name + H2H), **Arsenal wOBA**, season/L5/L10 AVG, pitch-type wOBA selector, **SP arsenal** (Savant pitch names), TB game log; Rotowire lineup filter (**Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has run, else default vs SP hand)
 - **[Player page](#player-pages-uplayerpy)** — component breakdown (season baseline, recent form, matchup, pitcher form), SP ERA L5 + H2H detail, H+TB+BB last-10 Altair chart; opposing SP name shows throw hand **(L)/(R)** when known
 - **[Stat history](#player-pages-uplayerpy)** — market dropdown (all batter/pitcher prop markets), **All / H2H** scope toggle (H2H = games vs today's slate opponent), **L5 / L10** window toggle, rolling averages, per-game Altair bar chart ([`ui/player_stats.py`](ui/player_stats.py))
 
@@ -1616,7 +1741,7 @@ Dedicated batting-context page at **`?view=hitters_life`** (link **Hitter's Life
 - **Columns:** Player, **Game & time**, **Vs pitcher** (SP name + H2H hits/AB or SP ERA L5), **Arsenal wOBA** (usage-weighted vs SP mix), **Batting average** (Szn / L5 / L10), **wOBA vs {pitch type}** (selectbox: Fastball, Slider, …), **SP arsenal** (Savant pitch names, usage order), **TB per game** (last 5 games, space-separated)
 - **Highlights:** light green when season AVG &gt; .300 or H2H AVG &gt; .300; light green TB log when every game is non-zero ([`ui/hitters_life_highlights.py`](ui/hitters_life_highlights.py))
 - **Game filter:** same pattern as batter score by game
-- **Lineup filter** (when one game selected): **Rotowire** default lineups vs opposing SP hand ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) → cached `data/processed/rotowire_lineups.parquet`); orders batters 1–9 per team
+- **Lineup filter** (when one game selected): prefers Rotowire **Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has cached **OFFICIAL** rows; otherwise **default vs opposing SP hand** ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) → `data/processed/rotowire_lineups.parquet`); orders batters 1–9 per team
 - Respects **Market type** filter only (not Edge / EV)
 
 ### Main board (`app.py` → `ui/board.py`)
@@ -1635,8 +1760,9 @@ The board always shows **one row per (player, market)** — the book with the hi
 - **Summary metrics:** Prop count, best edge, best EV, unique players (reflect Market / Edge / EV filters)
 - **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); columns include **Player** (link, **(L)/(R)** hand when known), **Game & time**, market, book, line, side, Over/Under %, **L5 / L10 %**, Edge; links to full lists, **[Hitter's Life](#hitters-life-board)**, and **[Version compare](#version-compare-v1--v2--v3--main)**
 - **Top 10 batter score** — highest Batter Score among batters on the slate (best row per player; respects Market type filter; independent of Edge / EV filters). See [Batter Score → UI surfaces](#batter-score) for PP/UD fantasy columns, **Batter score v2**, and conditional cell highlights
-- **Batter score by game** — same as Top 10 for **all** slate batters; **Game** selectbox filters to one matchup; **Batter Score Pick Builder** add controls
-- **Columns:** Player (link, **(L)/(R)** when known), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), **Pred #** and **Dist Over %** on pitcher K/walks/outs (dual-head), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
+- **Batter score by game** (Hitter's Life) — all slate batters with Top 10 fantasy/score columns plus **Batting average** and **TB per game (L5)** (Hitter's Life color rules); **Game** selectbox filters to one matchup; **Batter Score Pick Builder** add controls
+- **Hot batters — batter score** — top **20** batter scores among elite L5 AVG hitters with batting-board highlights; **Top props by market** table sits above it ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
+- **Columns:** Player (link, **(L)/(R)** when known), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), **Pred #** and **Dist Over %** on pitcher K/walks/outs (dual-head), **Stuff K (v2)** on pitcher strikeouts only (Statcast stuff model — separate from Model % / Edge), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
 - **L5 / L10 %:** Share of the player's last 5 / 10 completed games where the stat strictly exceeded the posted line (from feature parquets via [`ui/player_stats.py`](ui/player_stats.py))
 
 Board enrichment is **`@st.cache_data`** in [`app.py`](app.py), keyed on predictions CSV **mtime** — see [Cache-first → Streamlit caching](#zero-api-run-patterns).
@@ -1847,6 +1973,16 @@ python build_features.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v1|v2]
 
 Normally invoked by `ensure_features.py --fix`, not run manually. Rebuilds `data/processed/batter_features_v2_{start}_{end}.parquet` and `pitcher_features_v2_{start}_{end}.parquet` (L3/L5/L10/L20/season rolls, opponent strength, etc.).
 
+**Pitcher parquet extras (Stuff K v2):** when [`build_features.py`](build_features.py) runs, it also merges Statcast **stuff** metrics via [`pitcher_stuff.py`](pitcher_stuff.py) — SwStr%, CSW%, chase%, whiff%, velocity (L3/L5/L10/L20/season) and `batters_faced`. These columns are **not** part of main `PITCHER_FEATURES` in [`train.py`](train.py); they feed only [`pitcher_strikeout_stuff.py`](pitcher_strikeout_stuff.py). After upgrading stuff logic, run [`./run_pitcher_strikeout_stuff.sh`](#run_pitcher_strikeout_stuffsh--stuff-k-v2-pipeline) or at minimum `build_features.py` + `fit_pitcher_strikeout_stuff.py`.
+
+### fit_pitcher_strikeout_stuff.py — train Stuff K (v2) model
+
+```bash
+python scripts/fit_pitcher_strikeout_stuff.py --start YYYY-MM-DD --end YYYY-MM-DD [--version v2]
+```
+
+Trains Ridge regression **K% ~ SwStr% + chase% + velocity** (L5 rolls) on pitcher-game rows with 50+ pitches; saves `models/v2/pitcher_strikeouts_stuff.pkl`. Usually invoked by [`./run_pitcher_strikeout_stuff.sh`](#run_pitcher_strikeout_stuffsh--stuff-k-v2-pipeline), not run alone unless debugging.
+
 ### ensure_features.py — flags and `--fix`
 
 **`ensure_features.py --fix` is the pipeline’s “make sure player feature files are ready for predict” step.** It checks whether batter/pitcher feature parquets are complete and up to date; if not, it downloads Statcast and rebuilds them. [`run_daily.sh`](#run_dailysh--pipeline-flags) always runs this with `--fix` at step 1.
@@ -1967,7 +2103,7 @@ python predict.py [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--version v1|v2]
 | `--end` | Script default | Feature window end |
 | `--version` | `v2` | Model + feature version |
 
-Requires `data/processed/current_props.parquet` from `--props`. Writes `predictions_v2.csv` (and `predictions_v2_best.csv`). Output columns include `over_probability`, `under_probability`, `model_probability`, `edge`, `ev`, `consensus_line`, `best_book`, `best_odds`, `steam_flag`, etc. Optional `dist_over_probability` and `predicted_rate` for hits/strikeouts when distributional models exist. Batter score is **not** in the CSV — computed at Streamlit load in `app.py`.
+Requires `data/processed/current_props.parquet` from `--props`. Writes `predictions_v2.csv` (and `predictions_v2_best.csv`). Output columns include `over_probability`, `under_probability`, `model_probability`, `edge`, `ev`, `consensus_line`, `best_book`, `best_odds`, `steam_flag`, etc. Optional `dist_over_probability` and `predicted_rate` for hits/strikeouts when distributional models exist. Optional `stuff_predicted_count` / `stuff_over_probability` on **pitcher_strikeouts** rows when `models/v2/pitcher_strikeouts_stuff.pkl` exists (board **Stuff K (v2)**). Batter score is **not** in the CSV — computed at Streamlit load in `app.py`.
 
 ### app.py
 
@@ -1977,7 +2113,57 @@ streamlit run app.py [--server.port 8501]
 
 Reads `predictions.csv` (V1) or `predictions_v2.csv` (V2) from sidebar selection. Enrichment is cache-first — see [Cache-first data policy → Streamlit caching](#zero-api-run-patterns). See [Streamlit UI](#streamlit-ui).
 
-**Batter score boards (V2):** **Top 10 batter score** and **Batter score by game** show **PP fantasy** and **UD fantasy** (from `prizepicks_fantasy_lines.parquet` / `underdog_fantasy_lines.parquet`), **Game & time**, **L5 / L10 %** vs the PP line, and conditional cell highlights — see [Batter Score → UI surfaces](#batter-score). These columns are **not** on the main prop table.
+**Batter score boards (V2):** **Top 10 batter score** shows **PP fantasy**, **UD fantasy**, **Game & time**, **L5 / L10 %** vs the PP line, and conditional cell highlights. **Batter score by game** (Hitter's Life) adds **Batting average** and **TB per game (L5)** with Hitter's Life color rules and omits **Game & time** (use the Game filter instead). **Hot batters — batter score** on the main board lists up to **20** qualified hitters — see [Batter Score → UI surfaces](#batter-score). These columns are **not** on the main prop table.
+
+### run_official_lineups.sh — pre-game lineups
+
+Fetches Rotowire **Today's Lineup** for slate teams and merges **OFFICIAL** rows into `rotowire_lineups.parquet`. See [Official Rotowire lineups (pre-game)](#official-rotowire-lineups-pre-game).
+
+```bash
+./run_official_lineups.sh [--dry-run] [--teams ABBR,...] [--watch SECONDS] [--max-runs N] [--help]
+# Python flags pass through, e.g.:
+./run_official_lineups.sh --dry-run --min-players 8 --skip-slate-check
+python scripts/update_official_lineups.py --help
+```
+
+| Flag | Meaning |
+|------|---------|
+| *(none)* | All teams from `current_props.parquet`; 2 fetch retries per team |
+| `--dry-run` | Validate only; no parquet write |
+| `--teams` | Comma-separated Rotowire codes (bypass props lookup) |
+| `--watch SECONDS` | Poll loop (min 30s interval); optional `--max-runs N` |
+| `--min-players` / `--max-players` | Lineup size bounds (default 8–10) |
+| `--min-slate-overlap` | Min batters matching prop slate (default 3; `0` or `--skip-slate-check` disables) |
+| `--no-backup` | Skip timestamped backup before write |
+
+**Requires:** `.venv`, live network (`DISABLE_LIVE_FETCH` must be unset), and usually `current_props.parquet` from `./run_daily.sh`. **After:** reload Streamlit for Hitter's Life lineup filter.
+
+### run_pitcher_strikeout_stuff.sh — Stuff K (v2) pipeline
+
+One-shot wrapper: **features → stuff model fit → predict**. Independent of main `pitcher_strikeouts.pkl` and Track 1 learning.
+
+```bash
+./run_pitcher_strikeout_stuff.sh [--skip-features] [--skip-fit] [--skip-predict] [--streamlit] [--start DATE] [--end DATE]
+./run_pitcher_strikeout_stuff.sh --help
+```
+
+| Step | Script |
+|------|--------|
+| 1 | `scripts/ensure_features.py --fix` — fetch Statcast if needed, then `build_features.py` |
+| 2 | `scripts/fit_pitcher_strikeout_stuff.py` → `models/v2/pitcher_strikeouts_stuff.pkl` |
+| 3 | `predict.py` — `stuff_*` fields on strikeout rows; board **Stuff K (v2)** column |
+
+| Flag | Meaning |
+|------|---------|
+| `--skip-features` | Parquet already has stuff columns (e.g. after `./run_daily.sh`) |
+| `--skip-fit` | Model file already exists; re-predict only |
+| `--skip-predict` | Features + fit only |
+| `--start` / `--end` | Override default season start → yesterday |
+| `--streamlit` | Open board when done |
+
+**Typical use:** first-time setup or after [`pitcher_stuff.py`](pitcher_stuff.py) fixes. Daily board refresh stays on `./run_daily.sh` — it scores Stuff K v2 when the `.pkl` exists.
+
+See [Stuff strikeout model (v2)](#stuff-strikeout-model-v2).
 
 ### run_pitcher_outs_learning.sh — Track 1 self-learning loop
 
@@ -2019,6 +2205,8 @@ Implemented in [`features_v2.py`](features_v2.py) (`build_all_features_v2`):
 
 **Pitcher stat columns (V1 base + V2):** strikeouts, walks, hits allowed, **outs**, **earned runs** — with L3/L5/L10/L20/season rolling windows.
 
+**Stuff columns (extra parquet only, Stuff K v2):** SwStr%, CSW%, chase%, whiff%, avg/max velocity — same rolling windows; plus per-game `pitches`, `batters_faced`. Built by [`pitcher_stuff.py`](pitcher_stuff.py); consumed by [`pitcher_strikeout_stuff.py`](pitcher_strikeout_stuff.py), **not** by main `PITCHER_FEATURES` LightGBM training.
+
 Column lists: `BATTER_FEATURES_V2_EXTRA` and `PITCHER_FEATURES_V2_EXTRA` in `features_v2.py`; consumed by `train.py` via `feature_columns_for_version("v2")`.
 
 ---
@@ -2028,13 +2216,15 @@ Column lists: `BATTER_FEATURES_V2_EXTRA` and `PITCHER_FEATURES_V2_EXTRA` in `fea
 ```text
 mlb-prop-model/
 ├── run_daily.sh           # Daily pipeline: ensure_features → props → game lines → probables → predict [→ streamlit]
+├── run_official_lineups.sh     # Pre-game: Rotowire Today's Lineup → rotowire_lineups.parquet (OFFICIAL rows)
 ├── run_pitcher_outs_learning.sh  # Track 1: log → join outcomes → retrain outs → re-predict
+├── run_pitcher_strikeout_stuff.sh  # Stuff K v2: features → stuff model → predict
 ├── run_evaluation.sh      # Phase 6: backtest → calibrators → distributional (not daily)
 ├── docs/
 │   └── ROADMAP.md         # Predictable v3.1 + future tracks
 ├── fetch_data.py          # --props | --game-lines | --probables | --underdog-fantasy | --statcast
 ├── fetch_underdog_fantasy.py  # Underdog batter fantasy-point lines → underdog_fantasy_lines.parquet
-├── fetch_rotowire_lineups.py  # Rotowire default lineups (vs RHP/LHP) → rotowire_lineups.parquet
+├── fetch_rotowire_lineups.py  # Rotowire lineups: default (vs RHP/LHP) + OFFICIAL (Today's Lineup)
 ├── hitters_life_data.py       # Hitter's Life board data (AVG, wOBA, arsenal, TB log)
 ├── fetch_probables.py     # MLB Stats API probable starting pitchers
 ├── batter_score.py        # Batter Score composite (Phases A–D implemented)
@@ -2052,7 +2242,9 @@ mlb-prop-model/
 ├── clv.py                 # Closing line value for backtests (Phase 6)
 ├── prop_scoring.py        # Shared model scoring (predict + backtest)
 ├── game_lines.py          # Game totals/spreads consensus (Phase 5)
-├── build_features.py      # --start --end [--version v1|v2]
+├── build_features.py      # --start --end [--version v1|v2]; merges Statcast stuff into pitcher parquet
+├── pitcher_stuff.py       # SwStr / chase / velocity from pitch-level Statcast
+├── pitcher_strikeout_stuff.py  # Separate Stuff K (v2) fit + score (Ridge K% → Poisson)
 ├── features_v2.py         # V2-only feature logic (outs, ER, opponent, handedness, park)
 ├── train.py               # Per-market LightGBM training
 ├── predict.py             # Props + features → predictions CSV
@@ -2066,15 +2258,20 @@ mlb-prop-model/
 │   ├── backtest.py        # Historical props vs model edges + outcomes + CLV
 │   ├── fit_calibrators.py # Fit per-market probability calibrators (Phase 6)
 │   ├── fit_distributional.py  # Train Poisson rate models (Phase 6)
+│   ├── fit_pitcher_strikeout_stuff.py  # Train Stuff K (v2) Ridge model
+│   ├── test_pitcher_strikeout_stuff.py # Stuff metrics + model unit tests
 │   ├── test_batter_score.py   # Batter Score unit tests + board styling
 │   ├── test_underdog_fantasy.py  # Underdog fantasy API parse tests
-│   ├── test_hitters_life.py      # Hitter's Life + Savant arsenal tests
+│   ├── test_hitters_life.py      # Hitter's Life + Savant arsenal + official lineup tests
+│   ├── test_main_bottom_boards.py  # Hot batters + market top props board tests
+│   ├── update_official_lineups.py  # CLI for Rotowire Today's Lineup fetch/merge
 │   ├── test_player_stats.py   # L5/L10, PP/UD fantasy lookup tests
 │   ├── test_calibration.py    # Unit tests for Phase 6 calibration/dist
 │   ├── test_odds_movement.py  # Unit tests for Phase 4 snapshots/movement
 │   └── test_phase5.py         # Game lines + stolen bases tests
 ├── ui/
 │   ├── board.py           # Main prop board, filters, top Over/Under previews
+│   ├── main_bottom_boards.py  # Hot batters + top props by market (bottom of main board)
 │   ├── batter_score_board.py  # Top 10 + by-game batter score tables (v1 + v2 columns)
 │   ├── batter_score_highlights.py  # Shared PP/UD/L5/L10/Vs pitcher styling (board + pick cards)
 │   ├── hitters_life_page.py   # Hitter's Life page shell (?view=hitters_life)
@@ -2148,6 +2345,7 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | L5/L10 % or player charts show "—" | Rebuild V2 features; player name must match feature parquet `player_name` |
 | Player stats / L5–L10 stuck one day behind (e.g. last game 8/17 on 8/19) | `./run_daily.sh` uses **yesterday** as `--end` (`date -v-1d` on macOS). If the pipeline ran before Statcast posted yesterday's games, `data/raw/statcast_*_{end}.parquet` may exist but max `game_date` is still earlier — `ensure_features.py --fix` now detects this and re-fetches. Manual: `python fetch_data.py --statcast --start 2026-03-25 --end $(date -v-1d +%Y-%m-%d) --force` then re-run `./run_daily.sh`. After rebuild, [`ui/player_stats.py`](ui/player_stats.py) **auto-reloads** when feature parquet mtime changes (no Streamlit restart required). Player page shows **Game logs through YYYY-MM-DD** — verify it matches max `game_date` in `data/processed/*_features_v2_*.parquet` |
 | Duplicate **Walk** in market filters / pitcher walks missing | Fixed in [`ui/market_filters.py`](ui/market_filters.py): multiselect options are market **keys** with distinct labels **Batter Walks** / **Pitcher Walks** from [`ui/glossary.py`](ui/glossary.py) `MARKET_LABELS`. Table display uses `market_label()` via [`ui/formatting.py`](ui/formatting.py). Pitcher walks may have few rows but filter correctly when selected |
+| Hitter's Life lineup filter shows **default** not **Today's Lineup** | Lineups not posted yet on Rotowire, or script not run. Run `./run_official_lineups.sh` (or `--watch 300`); reload Streamlit. Check terminal for `skipped: empty lineup`. See [Official lineups](#official-rotowire-lineups-pre-game) |
 | Unknown option in `run_daily.sh` | Use `--train`, `--skip-props`, `--skip-game-lines`, `--skip-probables`, `--streamlit`, or `--help` |
 | Streamlit crash: `ValueError: cannot convert float NaN to integer` during Batter Score | Probable has SP **name** but **NaN `sp_id`** (TBD). Fixed by [`coerce_mlb_id()`](#6-nan-sp_id--tbd-starter-ids-2026-08-19) in [`utils.py`](utils.py). Pull latest code, then **restart Streamlit** — score is enriched at UI load, not in `predictions_v2.csv` |
 | Batter Score shows **Form only** for everyone | Run probables fetch ([Daily workflow](#daily-workflow-v2) step 4, or `fetch_data.py --probables`); check `data/processed/daily_probables.parquet`; **restart Streamlit** after fetch — see [Batter Score → Where it runs](#batter-score) |
@@ -2156,6 +2354,10 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | **Brett Bateman** / recent call-ups missing | No Statcast history — run `ensure_features.py --fix` after games accumulate; batter score needs ≥10 games |
 | **Pitcher outs learning** — empty predictions log | Run `predict.py` first; logging is automatic for `pitcher_strikeouts`, `pitcher_walks`, and `pitcher_outs`. Check `data/learning/predictions_log.parquet` |
 | **Pred # / Dist Over %** blank for Pitcher K / Walks / Outs | `./run_pitcher_outs_learning.sh --fit-distributional` then re-predict. Edge still from classifier |
+| **Stuff K (v2)** shows **—** on all strikeout rows | Run `./run_pitcher_strikeout_stuff.sh` once to create `models/v2/pitcher_strikeouts_stuff.pkl`. `./run_daily.sh` only scores stuff if that file exists. If model exists but column still empty, re-run `predict.py` |
+| **Stuff K (v2)** all **—** after feature rebuild | Pitcher parquet missing stuff columns — run `./run_pitcher_strikeout_stuff.sh --skip-fit` or full script. Check parquet has `swstr_pct_l5`, `chase_pct_l5`, etc. |
+| **`fit_pitcher_strikeout_stuff.py` — no training rows** | Usually fixed chase columns (see [Changelog → Stuff K v2](#2026-08-29--stuff-strikeout-model-v2-statcast-swstrchasevelocity)). Re-run `./run_pitcher_strikeout_stuff.sh` (or `ensure_features.py --fix` + fit) |
+| **`FileNotFoundError: statcast_*`** running stuff script | Fixed: `./run_pitcher_strikeout_stuff.sh` now uses `ensure_features.py --fix` (fetches Statcast like `./run_daily.sh`). If fetch fails (no games posted yet), pass `--end YYYY-MM-DD` for the latest date you have raw data for |
 | **Pitcher count-market learning** — zero outcome joins | Log must cover completed dates; feature parquets need box scores. Adjust `--join-start` / `--join-end` on `log_outcomes.py` |
 | Batter Score **Partial** vs **Full** — scores look incomparable | **By design:** **Full** = all four components (season, form, matchup, pitcher). **Partial** / **Partial · SP TBD** / **Form only** omit gated components and **renormalize** weights — rank within the same label, not across labels. See [Component gating](#3-component-gating-and-weight-renormalization) |
 | Batter Score unchanged after probables update | Computed at **Streamlit load**, not written to CSV. Restart after `./run_daily.sh` or probables fetch ([Where it runs](#batter-score)) |
@@ -2169,6 +2371,134 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | Range filter shows "All values: X" instead of slider | Column has only one unique numeric value — expected; filter is a no-op until lines vary |
 
 See also: [Operational note — suspended jobs](#operational-note--suspended-jobs-and-long-running-pipeline-steps) in the changelog.
+
+---
+
+## Official Rotowire lineups (pre-game)
+
+Rotowire publishes two lineup types on each team's [batting orders](https://www.rotowire.com/baseball/batting-orders.php) page:
+
+| Rotowire block | When available | Used by |
+|----------------|----------------|---------|
+| **Default vs. RHP / vs. LHP** | Always (projected platoon order) | Auto-cached the first time you open [Hitter's Life → Lineup filter](#hitters-life-board) |
+| **Today's Lineup** | Close to first pitch (confirmed order) | Cached by **`./run_official_lineups.sh`** — board **prefers** this when present |
+
+**Scope:** Display-only — reorders/filters batters on the **Hitter's Life** board. Does **not** change `predictions_v2.csv`, edge, EV, or Batter Score math.
+
+### When to run
+
+| Timing | Command |
+|--------|---------|
+| After evening/morning `./run_daily.sh` | Ensures `current_props.parquet` lists slate teams |
+| **~1–2 hours before first pitch** | `./run_official_lineups.sh` |
+| Lineups not posted yet | `./run_official_lineups.sh --watch 300` (poll every 5 min) or re-run manually |
+
+Then **reload Streamlit** (or refresh the browser). The lineup popover shows **Today's Lineup** vs **default vs {SP hand}** per team.
+
+### Quick commands
+
+```bash
+./run_official_lineups.sh                    # all slate teams from current_props.parquet
+./run_official_lineups.sh --dry-run            # fetch + validate, no write
+./run_official_lineups.sh --teams NYY,BOS,LAD  # specific Rotowire codes only
+./run_official_lineups.sh --watch 300 --max-runs 12   # poll up to 12 times
+python scripts/update_official_lineups.py --help      # full Python CLI flags
+```
+
+### What gets written
+
+**File:** `data/processed/rotowire_lineups.parquet`
+
+| Column | Meaning |
+|--------|---------|
+| `team_abbr` | Rotowire team code (e.g. `NYY`, `LAD`) |
+| `vs_hand` | `RHP` / `LHP` (defaults) or **`OFFICIAL`** (Today's Lineup) |
+| `slot` | Batting order 1–9 |
+| `player_name` | Rotowire display name |
+| `fetched_at` | UTC ISO timestamp |
+
+Official updates **replace OFFICIAL rows only** for teams that pass validation. Default RHP/LHP rows are never deleted by this script.
+
+### Safety and redundancy checks
+
+Before writing, each team's **Today's Lineup** must pass:
+
+1. **Non-empty** — empty `<ol>` or “lineup has yet to be announced” → **skipped** (cache unchanged)
+2. **Size** — 8–10 batters (configurable `--min-players` / `--max-players`)
+3. **No blank or duplicate names**
+4. **Slate overlap** — at least 3 lineup batters must match today's prop slate for that team (feature-based team lookup); disable with `--skip-slate-check`
+5. **Unchanged** — identical to cached OFFICIAL → skip write
+6. **Fetch retries** — 2 attempts per team, 5s apart (shell default)
+7. **Backup** — timestamped `rotowire_lineups.{stamp}.bak.parquet` before each write (`--no-backup` to skip)
+8. **Atomic save** — write `.tmp.parquet` then replace
+9. **`DISABLE_LIVE_FETCH=1`** — blocked by shell script (live Rotowire fetch required)
+
+### Code map
+
+| Module | Role |
+|--------|------|
+| [`run_official_lineups.sh`](run_official_lineups.sh) | Shell wrapper, pre-flight checks, optional `--watch` |
+| [`scripts/update_official_lineups.py`](scripts/update_official_lineups.py) | CLI: slate discovery, validation, summary |
+| [`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) | Parse **Today's Lineup**, `update_official_lineups()`, `lineup_for_team()` |
+| [`ui/hitters_life_board.py`](ui/hitters_life_board.py) | Lineup filter prefers official → default fallback |
+
+**Tests:** [`scripts/test_hitters_life.py`](scripts/test_hitters_life.py) (`test_validate_official_lineup`, Today's Lineup HTML parse).
+
+---
+
+## Stuff strikeout model (v2)
+
+Separate strikeout research column on the main board — **not** the LightGBM `pitcher_strikeouts.pkl` path and **not** the dual-head Poisson regressor (**Pred #** / **Dist Over %**).
+
+### What it predicts
+
+| Step | Detail |
+|------|--------|
+| **Inputs** | Rolling L5 Statcast process metrics from local pitch data: **SwStr%**, **chase (O-Swing%)**, **avg velocity** |
+| **Model** | Ridge regression on **K%** (strikeouts ÷ batters faced) per pitcher-game |
+| **Output** | Expected strikeouts = predicted K% × recent batters faced (L5); **Poisson P(Over line)** |
+| **Board** | **Stuff K (v2)** column — e.g. `5.7 K · 67% Over` on **Pitcher Strikeouts** rows only |
+
+Main **Model %**, **Edge**, and **EV** are unchanged (still the v1 classifier on box-score rolling stats).
+
+### Files
+
+| Path | Role |
+|------|------|
+| [`pitcher_stuff.py`](pitcher_stuff.py) | Derive stuff metrics from `data/raw/statcast_*.parquet` pitch rows |
+| [`build_features.py`](build_features.py) | Merge stuff + `batters_faced` into pitcher feature parquets |
+| [`pitcher_strikeout_stuff.py`](pitcher_strikeout_stuff.py) | Fit, load, score; writes `stuff_predicted_count`, `stuff_over_probability` |
+| `models/v2/pitcher_strikeouts_stuff.pkl` | Trained Ridge package |
+| [`run_pitcher_strikeout_stuff.sh`](run_pitcher_strikeout_stuff.sh) | One-shot pipeline wrapper |
+
+### When to run
+
+| Situation | Command |
+|-----------|---------|
+| **First time** / new clone | `./run_pitcher_strikeout_stuff.sh --streamlit` |
+| **Daily board** (model already exists) | `./run_daily.sh` only — `predict.py` auto-scores Stuff K v2 |
+| Parquet stale but model OK | `./run_pitcher_strikeout_stuff.sh --skip-fit` |
+| Re-fit after more games | `./run_pitcher_strikeout_stuff.sh --skip-features` *(if features fresh)* or full script |
+
+### Relationship to other K columns
+
+| Column | Source | Drives Edge/EV? |
+|--------|--------|-----------------|
+| **Model %** / **Over %** | `pitcher_strikeouts.pkl` (LightGBM) | **Yes** |
+| **Pred #** / **Dist Over %** | `models/v2/dist/pitcher_strikeouts.pkl` (Poisson on box-score features) | No (display only in Phase 1) |
+| **Stuff K (v2)** | `pitcher_strikeouts_stuff.pkl` (Statcast stuff) | **No** (display / research) |
+
+At **pitcher-season** aggregation, SwStr% vs K% correlation is much stronger (~R² 0.4+) than single-game K% (~R² 0.08) — game-level strikeout counts are noisy; the column is still useful for comparing process vs market on tonight’s line.
+
+### Bugs fixed during implementation (2026-08-29)
+
+| Issue | Symptom | Fix |
+|-------|---------|-----|
+| **Zone boolean bug** | `chase_pct_*` all NaN; `pitches_outside_zone` negative | `~` on integer zone flags from `np.where` — fixed by casting `in_zone` to **bool** in [`pitcher_stuff.py`](pitcher_stuff.py) |
+| **Unsafe division** | `build_features.py` crash on zero outside-zone pitches | Use `np.divide(..., where=)` with numpy arrays for chase/whiff/velocity rates |
+| **Missing BF rolls** | Stuff expected-K NaN at predict | Added `batters_faced` to pitcher game logs + rolling windows in `build_features.py` |
+
+**Tests:** [`scripts/test_pitcher_strikeout_stuff.py`](scripts/test_pitcher_strikeout_stuff.py)
 
 ---
 
@@ -2303,6 +2633,58 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 ---
 
 ## Changelog
+
+### 2026-08-29 — Stuff strikeout model (v2) — Statcast SwStr/chase/velocity
+
+**Context:** Users wanted a **separate** strikeout prediction path from process metrics (SwStr%, chase%, velocity), not mixed into the main LightGBM `pitcher_strikeouts.pkl` classifier — analogous to Batter Score v1 vs v2.
+
+**Added:**
+- [`pitcher_stuff.py`](pitcher_stuff.py) — pitch-level Statcast flags + per-game stuff aggregates + pitch-weighted rolling rates
+- [`pitcher_strikeout_stuff.py`](pitcher_strikeout_stuff.py) — Ridge K% model → expected K → Poisson Over %; `models/v2/pitcher_strikeouts_stuff.pkl`
+- [`run_pitcher_strikeout_stuff.sh`](run_pitcher_strikeout_stuff.sh) — one-shot: `build_features.py` → `fit_pitcher_strikeout_stuff.py` → `predict.py`
+- [`scripts/fit_pitcher_strikeout_stuff.py`](scripts/fit_pitcher_strikeout_stuff.py), [`scripts/test_pitcher_strikeout_stuff.py`](scripts/test_pitcher_strikeout_stuff.py)
+- Main board **Stuff K (v2)** column ([`ui/board.py`](ui/board.py)); CSV fields `stuff_predicted_count`, `stuff_over_probability` ([`predict.py`](predict.py))
+
+**Changed:**
+- [`build_features.py`](build_features.py) — merges stuff metrics + `batters_faced` into pitcher parquets (extra columns; **not** added to main `PITCHER_FEATURES` in [`train.py`](train.py))
+
+**Fixes (stuff pipeline):**
+- **Zone boolean bug** — `outside_zone = ~in_zone` on 0/1 integers produced negative pitch counts and all-NaN `chase_pct_*`; fixed with explicit bool `in_zone`
+- **Zero-denominator crashes** — safe `np.divide` for chase/whiff/velocity when a pitcher-game has no outside-zone pitches
+
+**Board impact:** **Stuff K (v2)** on strikeout rows only. **Model %**, **Edge**, and **EV** unchanged. First-time: `./run_pitcher_strikeout_stuff.sh`; daily `./run_daily.sh` re-scores when `.pkl` exists.
+
+**Follow-up:** `./run_pitcher_strikeout_stuff.sh` step 1 now uses `ensure_features.py --fix` (auto Statcast fetch) instead of bare `build_features.py` — fixes `FileNotFoundError: statcast_*` when yesterday’s raw shard was not on disk yet.
+
+---
+
+### 2026-08-30 — Batter score by game columns, hot batters board, TB log colors
+
+**Context:** Hitter's Life **Batter score by game** should surface batting context without duplicating **Game & time** when a Game filter is already present. Main board needed a larger hot-batters shortlist.
+
+**Added / changed:**
+- [`ui/batter_score_board.py`](ui/batter_score_board.py) — **Batter score by game** drops **Game & time**; adds **Batting average** and **TB per game (L5)** with the same highlights as the [Batting average board](#hitters-life-board) (TB color legend under the caption)
+- [`ui/main_bottom_boards.py`](ui/main_bottom_boards.py) — **Hot batters — batter score** limit raised from **10 → 20**; shares batting-AVG and TB-log styling via [`ui/hitters_life_highlights.py`](ui/hitters_life_highlights.py)
+- [`ui/hitters_life_highlights.py`](ui/hitters_life_highlights.py) — TB log **orange hot** rule extended (exactly one zero + ≥3 games with 2+ TB); **yellow warm** path for one zero + two 2+ TB games both in the most recent pair
+- Tests: [`scripts/test_batter_score.py`](scripts/test_batter_score.py), [`scripts/test_main_bottom_boards.py`](scripts/test_main_bottom_boards.py), [`scripts/test_hitters_life.py`](scripts/test_hitters_life.py)
+
+**Board impact:** Display-only on Hitter's Life by-game table and main-board hot batters section. Top 10 batter score and main prop edge/EV unchanged.
+
+---
+
+### 2026-08-24 — Official Rotowire lineups (pre-game)
+
+**Context:** Close to first pitch, Rotowire posts confirmed orders under **Today's Lineup**. Hitter's Life should use those instead of default vs RHP/LHP when available.
+
+**Added:**
+- [`run_official_lineups.sh`](run_official_lineups.sh) — pre-game wrapper with `--dry-run`, `--watch`, pre-flight checks
+- [`scripts/update_official_lineups.py`](scripts/update_official_lineups.py) — fetch, validate, merge **OFFICIAL** rows into `rotowire_lineups.parquet`
+- [`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) — parse Today's Lineup, `lineup_for_team()` (official → default fallback), backup + atomic save
+- [Hitter's Life](#hitters-life-board) lineup popover shows **Today's Lineup** vs default source per team
+
+**Board impact:** Hitter's Life lineup filter/order only. Prop edge/EV unchanged.
+
+---
 
 ### 2026-08-24 — Hitter's Life board, Batter Score v2, Batter Score Pick Builder, Savant arsenals
 

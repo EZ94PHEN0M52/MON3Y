@@ -43,6 +43,7 @@ from utils import (  # noqa: E402
 SOURCE_FILES = {
     "build_features.py": ROOT / "build_features.py",
     "game_lines.py": ROOT / "game_lines.py",
+    "pitcher_stuff.py": ROOT / "pitcher_stuff.py",
 }
 
 

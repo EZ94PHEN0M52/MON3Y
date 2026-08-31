@@ -8,8 +8,9 @@ Orthogonal to LightGBM prop models — used for UI ranking and player context.
 
 Cache-first policy (no redundant live API calls):
   - Game logs, rolling stats: data/processed/*_features_*.parquet only
-  - H2H + pitch arsenal (Phase D): data/raw/statcast_*.parquet (read once,
-    @lru_cache on _load_latest_statcast)
+  - Pitch arsenal v1 (five buckets): primary season statcast shard (@lru_cache)
+  - Pitch arsenal v2 (Savant types) + board H2H: merged statcast shards
+  - Scoring H2H vs SP: primary season statcast shard unless statcast= is passed
   - Probable SP lookup: data/processed/daily_probables.parquet
   - Never calls pybaseball.statcast(), Odds API, or MLB Stats API directly.
   - Set DISABLE_LIVE_FETCH=1 to block accidental fetches in shared helpers
@@ -19,6 +20,7 @@ Cache-first policy (no redundant live API calls):
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -29,16 +31,22 @@ import numpy as np
 import pandas as pd
 
 from batter_score import (
+    AVG_THRESHOLDS,
     BatterInputs,
     BatterScoreResult,
     GameLine,
+    MAX_GRADE_POINTS,
     PHASE_A_GATES,
     PHASE_B_GATES,
     PHASE_D_GATES,
     USE_TEAM_PITCHING_PROXY,
+    WEIGHTS_V1,
+    WEIGHTS_V2,
+    Weights,
     compute_batter_score_partial,
     compute_batter_score_phase_b,
     compute_batter_score_phase_d,
+    grade_min_threshold,
 )
 from build_features import EXTRA_BASES, HITS
 from fetch_probables import PROBABLES_PATH, lookup_opposing_sp
@@ -135,13 +143,56 @@ def _load_probables(path_key) -> pd.DataFrame:
     return pd.read_parquet(path_str)
 
 
+def _parse_statcast_shard_dates(path: Path) -> tuple[str, str] | None:
+    """Return (start_date, end_date) from ``statcast_{start}_{end}.parquet``."""
+    stem = path.stem
+    if not stem.startswith("statcast_"):
+        return None
+
+    body = stem.removeprefix("statcast_")
+    if "_" not in body:
+        return None
+
+    start_date, end_date = body.split("_", 1)
+    if not start_date or not end_date:
+        return None
+
+    return start_date, end_date
+
+
 def _statcast_cache_key():
+    """
+    Primary season Statcast shard for scoring lookups (v1 arsenal, scoring H2H).
+
+    Prefers cumulative season windows (``statcast_{open}_{latest}.parquet``)
+    over single-day incrementals (``statcast_{day}_{day}.parquet``), which can
+    sort later by filename but contain almost no pitch history.
+    """
     candidates = list(RAW_DIR.glob("statcast_*.parquet"))
     if not candidates:
         return (None, 0)
 
-    latest = max(candidates, key=lambda path: path.stem)
-    return _feature_cache_key(latest)
+    parsed: list[tuple[Path, str, str]] = []
+    for path in candidates:
+        dates = _parse_statcast_shard_dates(path)
+        if dates is None:
+            continue
+        parsed.append((path, dates[0], dates[1]))
+
+    if not parsed:
+        return _feature_cache_key(max(candidates, key=lambda path: path.stem))
+
+    cumulative = [
+        item for item in parsed if item[1] != item[2]
+    ]
+    pool = cumulative or parsed
+
+    def _rank(item: tuple[Path, str, str]) -> tuple[str, int]:
+        path, _start, end = item
+        return end, path.stat().st_size
+
+    best_path = max(pool, key=_rank)[0]
+    return _feature_cache_key(best_path)
 
 
 @lru_cache(maxsize=2)
@@ -166,7 +217,11 @@ def _merged_statcast_cache_key():
 
 @lru_cache(maxsize=1)
 def _load_merged_statcast(cache_key) -> Optional[pd.DataFrame]:
-    """All statcast shards merged and deduped — for board career H2H display."""
+    """All statcast shards merged and deduped — career H2H / wOBA / pitch-type stats.
+
+    Includes every ``data/raw/statcast_*.parquet`` (current season from
+    ``run_daily.sh`` plus optional history from ``fetch_statcast_history.py``).
+    """
     paths, _mtimes = cache_key
     if not paths:
         return None
@@ -252,6 +307,184 @@ def _compute_sp_era_l5(
 
     innings = total_outs / 3.0
     return float(total_er / innings * 9.0)
+
+
+FIP_FALLBACK_CONSTANT = 3.10
+FIP_L5_COLUMNS = (
+    "home_runs_allowed",
+    "hit_by_pitch",
+    "walks",
+    "strikeouts",
+    "outs",
+    "game_date",
+)
+FIP_TOTAL_COLUMNS = (
+    "strikeouts",
+    "walks",
+    "home_runs_allowed",
+    "hit_by_pitch",
+    "outs",
+    "earned_runs",
+)
+
+
+def _fip_constant_from_totals(totals: pd.Series) -> Optional[float]:
+    innings = float(totals["outs"]) / 3.0
+    if innings <= 0:
+        return None
+
+    league_era = float(totals["earned_runs"]) / innings * 9.0
+    fip_core = (
+        13.0 * float(totals["home_runs_allowed"])
+        + 3.0 * (float(totals["walks"]) + float(totals["hit_by_pitch"]))
+        - 2.0 * float(totals["strikeouts"])
+    ) / innings
+    return float(league_era - fip_core)
+
+
+def _pitcher_league_fip_totals(version: str = "v2") -> Optional[pd.Series]:
+    """Sum FIP inputs across all cached pitcher game-log rows."""
+    cache = _kind_player_game_cache(_kind_player_cache_key("pitcher", version))
+    if not cache:
+        return None
+
+    frames = [
+        frame
+        for frame in cache.values()
+        if frame is not None and not frame.empty
+    ]
+    if not frames:
+        return None
+
+    combined = pd.concat(frames, ignore_index=True)
+    if not set(FIP_TOTAL_COLUMNS).issubset(combined.columns):
+        return None
+
+    return combined[list(FIP_TOTAL_COLUMNS)].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).fillna(0).sum()
+
+
+def _fast_fip_totals_from_statcast(statcast: pd.DataFrame) -> Optional[pd.Series]:
+    """
+    Vectorized league FIP totals from Statcast (no half-inning ER loop).
+
+    Used only when pitcher feature parquets are missing HR/HBP columns.
+    Earned runs fall back to runs scored on the pitcher's pitches.
+    """
+    if statcast is None or statcast.empty:
+        return None
+
+    from build_features import PITCHER_OUT_EVENTS
+
+    required = {
+        "events",
+        "game_pk",
+        "pitcher",
+        "post_bat_score",
+        "bat_score",
+    }
+    if not required.issubset(statcast.columns):
+        return None
+
+    data = statcast[statcast["events"].notna()].copy()
+    if data.empty:
+        return None
+
+    data["strikeouts"] = data["events"].isin(
+        {"strikeout", "strikeout_double_play"},
+    ).astype(int)
+    data["walks"] = data["events"].isin(
+        {"walk", "intent_walk"},
+    ).astype(int)
+    data["home_runs_allowed"] = data["events"].eq("home_run").astype(int)
+    data["hit_by_pitch"] = data["events"].eq("hit_by_pitch").astype(int)
+    data["outs"] = (
+        data["events"]
+        .map(PITCHER_OUT_EVENTS)
+        .fillna(0)
+        .astype(int)
+    )
+    data["earned_runs"] = (
+        pd.to_numeric(data["post_bat_score"], errors="coerce")
+        - pd.to_numeric(data["bat_score"], errors="coerce")
+    ).fillna(0).clip(lower=0)
+
+    grouped = data.groupby(["game_pk", "pitcher"], as_index=False).agg(
+        strikeouts=("strikeouts", "sum"),
+        walks=("walks", "sum"),
+        home_runs_allowed=("home_runs_allowed", "sum"),
+        hit_by_pitch=("hit_by_pitch", "sum"),
+        outs=("outs", "sum"),
+        earned_runs=("earned_runs", "sum"),
+    )
+    return grouped[list(FIP_TOTAL_COLUMNS)].sum()
+
+
+@lru_cache(maxsize=4)
+def _league_fip_constant(version: str = "v2") -> float:
+    """
+    League FIP constant from cached pitcher game logs (Statcast-derived).
+
+    ``constant = league_ERA - (13*HR + 3*(BB+HBP) - 2*K) / IP`` so FIP scales
+    like ERA across the cached sample. Falls back to a fast Statcast aggregate
+    while pitcher parquets are rebuilding.
+    """
+    totals = _pitcher_league_fip_totals(version)
+    if totals is None:
+        statcast = _load_merged_statcast(_merged_statcast_cache_key())
+        totals = _fast_fip_totals_from_statcast(statcast)
+
+    if totals is None:
+        return FIP_FALLBACK_CONSTANT
+
+    constant = _fip_constant_from_totals(totals)
+    if constant is None:
+        return FIP_FALLBACK_CONSTANT
+    return constant
+
+
+def _compute_sp_fip_l5(
+    sp_id: Optional[int],
+    sp_name: Optional[str],
+    version: str = "v2",
+) -> Optional[float]:
+    """FIP over the pitcher's last five starts (Batter Score v2 pitcher form)."""
+    rows = _pitcher_rows_by_sp(sp_id, sp_name, version=version)
+    if rows is None or rows.empty:
+        return None
+
+    if not set(FIP_L5_COLUMNS).issubset(rows.columns):
+        return None
+
+    recent = rows.sort_values("game_date").tail(5)
+    home_runs = pd.to_numeric(
+        recent["home_runs_allowed"],
+        errors="coerce",
+    ).fillna(0).sum()
+    hit_by_pitch = pd.to_numeric(
+        recent["hit_by_pitch"],
+        errors="coerce",
+    ).fillna(0).sum()
+    walks = pd.to_numeric(recent["walks"], errors="coerce").fillna(0).sum()
+    strikeouts = pd.to_numeric(
+        recent["strikeouts"],
+        errors="coerce",
+    ).fillna(0).sum()
+    total_outs = pd.to_numeric(recent["outs"], errors="coerce").fillna(0).sum()
+
+    innings = float(total_outs) / 3.0
+    if innings <= 0:
+        return None
+
+    constant = _league_fip_constant(version)
+    fip_core = (
+        13.0 * float(home_runs)
+        + 3.0 * (float(walks) + float(hit_by_pitch))
+        - 2.0 * float(strikeouts)
+    ) / innings
+    return float(fip_core + constant)
 
 
 def _h2h_raw_points(events: pd.Series) -> Tuple[int, float]:
@@ -389,6 +622,188 @@ def build_game_context(
     }
 
 
+
+def parse_h2h_fraction(text: str) -> Optional[Tuple[int, int]]:
+    """
+    Parse career H2H batting average input like ``3/8`` or ``12 / 40``.
+
+    Returns ``(hits, ab)`` or None when invalid.
+    """
+    if text is None or not str(text).strip():
+        return None
+
+    match = re.match(r"^\s*(\d+)\s*/\s*(\d+)\s*$", str(text).strip())
+    if not match:
+        return None
+
+    hits = int(match.group(1))
+    ab = int(match.group(2))
+    if ab <= 0 or hits < 0 or hits > ab:
+        return None
+
+    return hits, ab
+
+
+def estimate_h2h_avg_raw_points_from_hits_ab(
+    hits: int,
+    ab: int,
+    *,
+    max_raw_points_for_100: float = 6.0,
+) -> float:
+    """
+    Map career H/AB to per-game raw points for manual H2H scoring.
+
+    Uses the same AVG letter grades as matchup grade so a strong career line
+    (e.g. 3/8 = .375) maps to a high H2H index instead of a muted raw-points
+    estimate.
+    """
+    if ab <= 0:
+        raise ValueError("ab must be positive")
+    if hits < 0 or hits > ab:
+        raise ValueError("hits must be between 0 and ab")
+
+    _, grade_points = grade_min_threshold(hits / ab, AVG_THRESHOLDS)
+    return float(grade_points / MAX_GRADE_POINTS * max_raw_points_for_100)
+
+
+def apply_manual_h2h_override(
+    batter: BatterInputs,
+    hits: int,
+    ab: int,
+) -> BatterInputs:
+    """Replace Statcast H2H fields with user-supplied career H/AB."""
+    avg_raw = estimate_h2h_avg_raw_points_from_hits_ab(hits, ab)
+    return replace(
+        batter,
+        h2h_pa=ab,
+        h2h_hits=hits,
+        h2h_ab=ab,
+        h2h_avg_raw_points=avg_raw,
+        h2h_manual_override=True,
+    )
+
+
+def _score_batter_inputs(
+    batter: BatterInputs,
+    *,
+    game_context: Optional[dict] = None,
+    weights: Weights = WEIGHTS_V1,
+    pitcher_form_use_fip: bool = False,
+) -> Optional[BatterScoreResult]:
+    """Shared Phase A/B/D selection for Batter Score v1 paths."""
+    sp_named = bool(batter.opposing_sp_name and game_context is not None)
+    if pitcher_form_use_fip:
+        sp_ready = sp_named and batter.opponent_pitcher_fip_l5 is not None
+    else:
+        sp_ready = sp_named and batter.opponent_pitcher_era_l5 is not None
+    matchup_ready = (
+        sp_ready
+        and arsenal_ready(batter.opponent_pitcher_arsenal)
+    )
+
+    try:
+        if matchup_ready:
+            return compute_batter_score_phase_d(
+                batter,
+                gates=PHASE_D_GATES,
+                weights=weights,
+                pitcher_form_use_fip=pitcher_form_use_fip,
+            )
+
+        if sp_ready:
+            return compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                weights=weights,
+                pitcher_form_use_fip=pitcher_form_use_fip,
+            )
+
+        if (
+            USE_TEAM_PITCHING_PROXY
+            and batter.team_opp_earned_runs_proxy is not None
+            and game_context is not None
+            and not sp_named
+        ):
+            return compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                sp_tbd=True,
+                team_proxy=True,
+                weights=weights,
+                pitcher_form_use_fip=pitcher_form_use_fip,
+            )
+
+        return compute_batter_score_partial(
+            batter,
+            gates=PHASE_A_GATES,
+            weights=weights,
+            sp_tbd=game_context is not None and not sp_named,
+            pitcher_form_use_fip=pitcher_form_use_fip,
+        )
+    except ValueError:
+        return None
+
+
+def _score_batter_inputs_v2(
+    batter: BatterInputs,
+    *,
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    """Batter Score v2: v2 weights, Savant pitch types, FIP L5 pitcher form."""
+    sp_named = bool(batter.opposing_sp_name and game_context is not None)
+    sp_ready = sp_named and batter.opponent_pitcher_fip_l5 is not None
+    matchup_ready_v2 = (
+        sp_ready
+        and arsenal_ready(batter.opponent_pitcher_arsenal_v2)
+    )
+
+    try:
+        if matchup_ready_v2:
+            batter_v2 = replace(
+                batter,
+                opponent_pitcher_arsenal=batter.opponent_pitcher_arsenal_v2,
+            )
+            return compute_batter_score_phase_d(
+                batter_v2,
+                gates=PHASE_D_GATES,
+                weights=WEIGHTS_V2,
+                pitcher_form_use_fip=True,
+            )
+
+        if sp_ready:
+            return compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                weights=WEIGHTS_V2,
+                pitcher_form_use_fip=True,
+            )
+
+        if (
+            USE_TEAM_PITCHING_PROXY
+            and batter.team_opp_earned_runs_proxy is not None
+            and game_context is not None
+            and not sp_named
+        ):
+            return compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                sp_tbd=True,
+                team_proxy=True,
+                weights=WEIGHTS_V2,
+                pitcher_form_use_fip=True,
+            )
+
+        return compute_batter_score_partial(
+            batter,
+            gates=PHASE_A_GATES,
+            weights=WEIGHTS_V2,
+            sp_tbd=game_context is not None and not sp_named,
+            pitcher_form_use_fip=True,
+        )
+    except ValueError:
+        return None
+
+
 def _normalize_game_date(value) -> str:
     return str(pd.to_datetime(value).strftime("%Y-%m-%d"))
 
@@ -434,6 +849,7 @@ def build_batter_inputs_from_rows(
     sp_name = None
     sp_id = None
     sp_era_l5 = None
+    sp_fip_l5 = None
     h2h_pa = None
     h2h_avg_raw_points = None
     h2h_hits = None
@@ -455,19 +871,32 @@ def build_batter_inputs_from_rows(
                 sp_name,
                 version=version,
             )
+            sp_fip_l5 = _compute_sp_fip_l5(
+                sp_id,
+                sp_name,
+                version=version,
+            )
             if sp_id is not None:
                 h2h_pa, h2h_avg_raw_points, h2h_hits, h2h_ab = _compute_h2h_stats(
                     batter_id,
                     sp_id,
                 )
-                statcast = _load_latest_statcast(_statcast_cache_key())
+                statcast_latest = _load_latest_statcast(
+                    _statcast_cache_key()
+                )
+                statcast_merged = _load_merged_statcast(
+                    _merged_statcast_cache_key()
+                )
                 opponent_arsenal = build_opponent_pitcher_arsenal(
-                    statcast,
+                    statcast_latest,
                     batter_id,
                     sp_id,
                 )
+                statcast_for_v2 = statcast_merged
+                if statcast_for_v2 is None or statcast_for_v2.empty:
+                    statcast_for_v2 = statcast_latest
                 opponent_arsenal_v2 = build_opponent_pitcher_arsenal_detailed(
-                    statcast,
+                    statcast_for_v2,
                     batter_id,
                     sp_id,
                 )
@@ -481,6 +910,7 @@ def build_batter_inputs_from_rows(
         opponent_pitcher_arsenal=opponent_arsenal,
         opponent_pitcher_arsenal_v2=opponent_arsenal_v2,
         opponent_pitcher_era_l5=sp_era_l5,
+        opponent_pitcher_fip_l5=sp_fip_l5,
         opposing_sp_name=sp_name,
         h2h_pa=h2h_pa,
         h2h_avg_raw_points=h2h_avg_raw_points,
@@ -570,12 +1000,14 @@ def score_batter_as_of(
             return compute_batter_score_phase_d(
                 batter,
                 gates=PHASE_D_GATES,
+                weights=WEIGHTS_V1,
             )
 
         if sp_ready:
             return compute_batter_score_phase_b(
                 batter,
                 gates=PHASE_B_GATES,
+                weights=WEIGHTS_V1,
             )
 
         if (
@@ -589,11 +1021,13 @@ def score_batter_as_of(
                 gates=PHASE_B_GATES,
                 sp_tbd=True,
                 team_proxy=True,
+                weights=WEIGHTS_V1,
             )
 
         return compute_batter_score_partial(
             batter,
             gates=PHASE_A_GATES,
+            weights=WEIGHTS_V1,
             sp_tbd=game_context is not None and not sp_named,
         )
     except ValueError:
@@ -637,56 +1071,21 @@ def score_batter(
     if batter is None:
         return None
 
-    sp_named = bool(batter.opposing_sp_name and game_context is not None)
-    sp_ready = sp_named and batter.opponent_pitcher_era_l5 is not None
-    matchup_ready = (
-        sp_ready
-        and arsenal_ready(batter.opponent_pitcher_arsenal)
-    )
-
-    try:
-        if matchup_ready:
-            return compute_batter_score_phase_d(
-                batter,
-                gates=PHASE_D_GATES,
-            )
-
-        if sp_ready:
-            return compute_batter_score_phase_b(
-                batter,
-                gates=PHASE_B_GATES,
-            )
-
-        if (
-            USE_TEAM_PITCHING_PROXY
-            and batter.team_opp_earned_runs_proxy is not None
-            and game_context is not None
-            and not sp_named
-        ):
-            return compute_batter_score_phase_b(
-                batter,
-                gates=PHASE_B_GATES,
-                sp_tbd=True,
-                team_proxy=True,
-            )
-
-        return compute_batter_score_partial(
-            batter,
-            gates=PHASE_A_GATES,
-            sp_tbd=game_context is not None and not sp_named,
-        )
-    except ValueError:
-        return None
+    return _score_batter_inputs(batter, game_context=game_context)
 
 
-def score_batter_v2(
+def score_batter_with_manual_h2h(
     player_name: str,
+    hits: int,
+    ab: int,
+    *,
     version: str = "v2",
     game_context: Optional[dict] = None,
 ) -> Optional[BatterScoreResult]:
     """
-    Batter Score v2: same composite as Phase D but matchup grade uses Savant
-    pitch types (Sinker, Sweeper, etc.) instead of five buckets.
+    Batter Score v1 with user-supplied career H2H H/AB overriding Statcast H2H.
+
+    All other inputs (season form, SP ERA, pitch arsenal) still come from cache.
     """
     batter = build_batter_inputs(
         player_name,
@@ -696,50 +1095,27 @@ def score_batter_v2(
     if batter is None:
         return None
 
-    sp_named = bool(batter.opposing_sp_name and game_context is not None)
-    sp_ready = sp_named and batter.opponent_pitcher_era_l5 is not None
-    matchup_ready_v2 = (
-        sp_ready
-        and arsenal_ready(batter.opponent_pitcher_arsenal_v2)
+    batter = apply_manual_h2h_override(batter, hits, ab)
+    return _score_batter_inputs(batter, game_context=game_context)
+
+
+def score_batter_v2(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    """
+    Batter Score v2: v2 weights, Savant pitch-type matchup, FIP L5 pitcher form.
+    """
+    batter = build_batter_inputs(
+        player_name,
+        version=version,
+        game_context=game_context,
     )
-
-    try:
-        if matchup_ready_v2:
-            batter_v2 = replace(
-                batter,
-                opponent_pitcher_arsenal=batter.opponent_pitcher_arsenal_v2,
-            )
-            return compute_batter_score_phase_d(
-                batter_v2,
-                gates=PHASE_D_GATES,
-            )
-
-        if sp_ready:
-            return compute_batter_score_phase_b(
-                batter,
-                gates=PHASE_B_GATES,
-            )
-
-        if (
-            USE_TEAM_PITCHING_PROXY
-            and batter.team_opp_earned_runs_proxy is not None
-            and game_context is not None
-            and not sp_named
-        ):
-            return compute_batter_score_phase_b(
-                batter,
-                gates=PHASE_B_GATES,
-                sp_tbd=True,
-                team_proxy=True,
-            )
-
-        return compute_batter_score_partial(
-            batter,
-            gates=PHASE_A_GATES,
-            sp_tbd=game_context is not None and not sp_named,
-        )
-    except ValueError:
+    if batter is None:
         return None
+
+    return _score_batter_inputs_v2(batter, game_context=game_context)
 
 
 def _score_cache_key(

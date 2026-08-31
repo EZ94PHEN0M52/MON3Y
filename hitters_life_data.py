@@ -48,6 +48,23 @@ def _format_avg_cell(hits: int, ab: int) -> str:
     return f"{hits}/{ab} {_format_avg_rate(hits, ab)}"
 
 
+def format_h2h_avg_display(
+    h2h_avg: float | None,
+    *,
+    hits: int | None = None,
+    ab: int | None = None,
+) -> str:
+    """Display H2H average as ``hits/AB .AVG`` (e.g. ``4/10 .400``)."""
+    if h2h_avg is None or (isinstance(h2h_avg, float) and pd.isna(h2h_avg)):
+        return "—"
+
+    if ab and ab > 0 and hits is not None:
+        return _format_avg_cell(int(hits), int(ab))
+
+    avg_text = f"{float(h2h_avg):.3f}".removeprefix("0")
+    return avg_text if avg_text.startswith(".") else avg_text
+
+
 def _format_avg_value(value) -> str:
     if value is None or pd.isna(value):
         return "—"
@@ -78,6 +95,38 @@ def _cached_batter_game_hits_ab(
         hits, ab = _h2h_hits_ab(group["events"])
         if ab > 0:
             games.append((str(game_date)[:10], hits, ab))
+
+    return tuple(games)
+
+
+@lru_cache(maxsize=512)
+def _cached_batter_game_total_bases(
+    batter_id: int,
+    cache_key: tuple,
+) -> tuple[tuple[str, int], ...]:
+    """Per-game total bases from merged Statcast (matches build_features TB logic)."""
+    statcast = _load_merged_statcast(cache_key)
+    if statcast is None or statcast.empty:
+        return tuple()
+
+    from build_features import EXTRA_BASES
+
+    rows = statcast[
+        statcast["batter"].astype(int).eq(int(batter_id))
+        & statcast["events"].notna()
+    ]
+    if rows.empty or "game_date" not in rows.columns:
+        return tuple()
+
+    games: list[tuple[str, int]] = []
+    for game_date, group in rows.groupby("game_date", sort=True):
+        total_bases = int(
+            group["events"]
+            .map(EXTRA_BASES)
+            .fillna(0)
+            .sum()
+        )
+        games.append((str(game_date)[:10], total_bases))
 
     return tuple(games)
 
@@ -235,7 +284,26 @@ def format_total_bases_game_log(
     *,
     n: int = 5,
 ) -> str:
-    """Last *n* total-base outcomes as a space-separated string."""
+    """
+    Last *n* total-base outcomes as space-separated integers.
+
+    Leftmost value is the most recent game. Uses merged Statcast (same source
+    as season/L5/L10 AVG). Falls back to feature parquets when Statcast is
+    unavailable.
+    """
+    player_rows = _batter_rows(player_name, version=version)
+    if player_rows is not None and not player_rows.empty:
+        latest = player_rows.sort_values("game_date").iloc[-1]
+        batter_id = coerce_mlb_id(latest.get("batter"))
+        if batter_id is not None:
+            games = _cached_batter_game_total_bases(
+                batter_id,
+                _merged_statcast_cache_key(),
+            )
+            if games:
+                recent = list(reversed(games[-n:]))
+                return " ".join(str(total_bases) for _, total_bases in recent)
+
     log = get_last_n_games(
         player_name,
         "batter_total_bases",
@@ -247,13 +315,13 @@ def format_total_bases_game_log(
 
     values = (
         pd.to_numeric(log["total_bases"], errors="coerce")
-        .fillna(0)
+        .dropna()
         .astype(int)
         .tolist()
     )
     if not values:
         return "—"
-    return " ".join(str(value) for value in values)
+    return " ".join(str(value) for value in reversed(values))
 
 
 def lookup_sp_arsenal_usage(
@@ -317,11 +385,44 @@ def format_vs_pitcher_cell(
     *,
     sp_display: str,
 ) -> str:
-    """Vs pitcher: SP name + H2H batting average or SP ERA L5."""
-    from batter_score_data import lookup_h2h_board_stats
+    """Legacy combined cell (batter score pick cards). Prefer ``build_vs_pitcher_fields``."""
+    fields = build_vs_pitcher_fields(
+        player_name,
+        version,
+        game_context,
+        result,
+        sp_display=sp_display,
+    )
+    label = fields["opposing_sp"]
+    if label in ("—", "SP TBD"):
+        return "—" if label == "—" else "SP TBD"
+    if fields["h2h_avg"] is not None and fields.get("h2h_ab"):
+        hits, ab = fields["h2h_hits"], fields["h2h_ab"]
+        return f"{label} · {_format_avg_cell(hits, ab)}"
+    if fields.get("sp_era_l5") is not None:
+        return f"{label} · SP ERA L5 {fields['sp_era_l5']:.2f}"
+    return label
 
-    MIN_PA_H2H_BOARD = 3
+
+MIN_PA_H2H_BOARD = 3
+
+
+def build_vs_pitcher_fields(
+    player_name: str,
+    version: str,
+    game_context: dict | None,
+    result,
+    *,
+    sp_display: str,
+) -> dict:
+    """
+    Split opposing-SP display for Hitter's Life.
+
+    Returns ``opposing_sp`` (name), ``h2h_avg`` (float or None for sorting),
+    and optional ``h2h_hits`` / ``h2h_ab`` / ``sp_era_l5``.
+    """
     label = sp_display if sp_display and sp_display != "TBD" else "SP TBD"
+    opposing_sp = label if label != "SP TBD" else "—"
 
     pa = hits = ab = None
     if game_context:
@@ -331,14 +432,22 @@ def format_vs_pitcher_cell(
             game_context=game_context,
         )
 
+    h2h_avg = None
     if pa is not None and pa >= MIN_PA_H2H_BOARD and ab and ab > 0:
         hit_count = hits if hits is not None else 0
-        return f"{label} · {_format_avg_cell(hit_count, ab)}"
+        h2h_avg = hit_count / ab
 
-    if result is not None and result.opposing_sp_era_l5 is not None:
-        return f"{label} · SP ERA L5 {result.opposing_sp_era_l5:.2f}"
+    sp_era_l5 = None
+    if h2h_avg is None and result is not None and result.opposing_sp_era_l5 is not None:
+        sp_era_l5 = float(result.opposing_sp_era_l5)
 
-    return label if label != "SP TBD" else "—"
+    return {
+        "opposing_sp": opposing_sp,
+        "h2h_avg": h2h_avg,
+        "h2h_hits": hits if hits is not None else None,
+        "h2h_ab": ab,
+        "sp_era_l5": sp_era_l5,
+    }
 
 
 def _lookup_batter_team_abbr(
@@ -399,8 +508,8 @@ def build_hitters_life_row(
     *,
     pitch_bucket: str,
 ) -> dict:
-    from batter_score_data import lookup_batter_score
-    from ui.formatting import format_game_time, format_name_with_hand
+    from batter_score_data import lookup_batter_score, lookup_batter_score_v2
+    from ui.formatting import format_name_with_hand
 
     game_context = build_game_context(
         game=row.get("game"),
@@ -409,6 +518,11 @@ def build_hitters_life_row(
         away_team=row.get("away_team"),
     )
     result = lookup_batter_score(
+        row["player"],
+        version=version,
+        game_context=game_context,
+    )
+    result_v2 = lookup_batter_score_v2(
         row["player"],
         version=version,
         game_context=game_context,
@@ -424,6 +538,14 @@ def build_hitters_life_row(
             result.opposing_sp_name,
             sp_hand,
         )
+
+    vs_pitcher = build_vs_pitcher_fields(
+        row["player"],
+        version,
+        game_context,
+        result,
+        sp_display=opposing,
+    )
 
     woba = lookup_pitch_bucket_woba(
         row["player"],
@@ -441,22 +563,37 @@ def build_hitters_life_row(
         game_context,
     )
 
+    from ui.batter_score import format_batter_score_display
+
+    batter_score = result.batter_score if result else None
+    batter_score_label = (result.partial_label if result else "") or ""
+    batter_score_v2 = result_v2.batter_score if result_v2 else None
+    batter_score_v2_label = (result_v2.partial_label if result_v2 else "") or ""
+
     return {
         "player": row["player"],
         "player_link": hitters_life_player_link(row["player"]),
-        "game_time": format_game_time(row.get("game"), row.get("commence_time")),
-        "vs_pitcher": format_vs_pitcher_cell(
-            row["player"],
-            version,
-            game_context,
-            result,
-            sp_display=opposing,
+        "opposing_sp": vs_pitcher["opposing_sp"],
+        "h2h_avg": format_h2h_avg_display(
+            vs_pitcher["h2h_avg"],
+            hits=vs_pitcher["h2h_hits"],
+            ab=vs_pitcher["h2h_ab"],
         ),
+        "_h2h_avg": vs_pitcher["h2h_avg"],
         "arsenal_woba": format_pitch_woba(arsenal_woba),
         "batting_average": format_batting_average_column(
             row["player"],
             version,
         ),
+        "batter_score_v1_display": format_batter_score_display(
+            batter_score,
+            batter_score_label,
+        ),
+        "batter_score_v2_display": format_batter_score_display(
+            batter_score_v2,
+            batter_score_v2_label,
+        ),
+        "_batter_score": batter_score,
         "pitch_woba": format_pitch_woba(woba),
         "sp_arsenal": format_sp_arsenal_column(arsenal_usage),
         "total_bases_log": format_total_bases_game_log(

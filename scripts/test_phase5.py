@@ -90,11 +90,17 @@ def test_game_markets_defined() -> None:
     assert "spreads" in GAME_MARKETS
 
 
-def test_stolen_bases_in_prop_markets() -> None:
-    assert "batter_stolen_bases" in PROP_MARKETS
-    assert "batter_stolen_bases" in MODEL_MAP
+def test_excluded_prop_markets_not_fetched() -> None:
+    from odds_api import EXCLUDED_LIVE_PROP_MARKETS, PROP_MARKETS
+
+    for market in EXCLUDED_LIVE_PROP_MARKETS:
+        assert market not in PROP_MARKETS
+
+    assert "batter_stolen_bases" in MARKET_STAT_MAP
     assert MARKET_STAT_MAP["batter_stolen_bases"] == "stolen_bases"
     assert "stolen_bases" in BATTER_MARKETS
+    assert "batter_stolen_bases" not in MODEL_MAP
+    assert "batter_home_runs" not in MODEL_MAP
 
 
 def test_schema_version_bumped() -> None:
@@ -198,7 +204,7 @@ def test_enrich_feature_row_with_game_lines() -> None:
 
 def main() -> int:
     test_game_markets_defined()
-    test_stolen_bases_in_prop_markets()
+    test_excluded_prop_markets_not_fetched()
     test_schema_version_bumped()
     test_game_line_features_in_v2_columns()
     test_stolen_bases_features_in_batter_columns()

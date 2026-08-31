@@ -7,7 +7,7 @@ import streamlit as st
 
 from fetch_rotowire_lineups import (
     ensure_rotowire_lineups,
-    lineup_for_team_hand,
+    lineup_for_team,
     odds_team_to_abbr,
 )
 from hitters_life_data import (
@@ -17,7 +17,10 @@ from hitters_life_data import (
 )
 from pitch_matchup import PITCH_BUCKETS
 from ui.glossary import GLOSSARY
-from ui.hitters_life_highlights import style_hitters_life_board
+from ui.hitters_life_highlights import (
+    render_tb_log_color_legend,
+    style_hitters_life_board,
+)
 from ui.player_stats import lookup_pitcher_hand
 
 
@@ -84,15 +87,23 @@ def _lineup_context_for_game(
     )
 
     lineups_df = ensure_rotowire_lineups(team_abbrs)
-    away_lineup = (
-        lineup_for_team_hand(lineups_df, away_abbr, home_sp_hand or "R")
+    away_lineup, away_source = (
+        lineup_for_team(
+            lineups_df,
+            away_abbr,
+            home_sp_hand or "R",
+        )
         if away_abbr
-        else []
+        else ([], "none")
     )
-    home_lineup = (
-        lineup_for_team_hand(lineups_df, home_abbr, away_sp_hand or "R")
+    home_lineup, home_source = (
+        lineup_for_team(
+            lineups_df,
+            home_abbr,
+            away_sp_hand or "R",
+        )
         if home_abbr
-        else []
+        else ([], "none")
     )
 
     return {
@@ -100,6 +111,8 @@ def _lineup_context_for_game(
         "home_abbr": home_abbr,
         "away_lineup": away_lineup,
         "home_lineup": home_lineup,
+        "away_lineup_source": away_source,
+        "home_lineup_source": home_source,
         "home_sp_hand": home_sp_hand,
         "away_sp_hand": away_sp_hand,
     }
@@ -155,16 +168,16 @@ def _hitters_life_column_config(pitch_bucket: str):
             help="Open player profile.",
             display_text=r"#(.*)$",
         ),
-        "game_time": st.column_config.TextColumn(
-            "Game & time",
-            help="Matchup and scheduled first pitch (ET).",
+        "opposing_sp": st.column_config.TextColumn(
+            "Opposing SP",
+            help="Probable opposing starter (throw hand when known).",
         ),
-        "vs_pitcher": st.column_config.TextColumn(
-            "Vs pitcher",
+        "h2h_avg": st.column_config.TextColumn(
+            "H2H AVG",
             help=(
-                "Probable opposing starter and career batting average vs that "
-                "SP (hits/AB) when PA ≥ 3; otherwise SP ERA over last 5 starts. "
-                "Light green when H2H average is above .300."
+                "Career batting average vs this starter as hits/AB and AVG "
+                "(PA ≥ 3). Click column header to sort. Light green when "
+                "above .300."
             ),
         ),
         "arsenal_woba": st.column_config.TextColumn(
@@ -178,8 +191,18 @@ def _hitters_life_column_config(pitch_bucket: str):
             "Batting average",
             help=(
                 "Full-season AVG and rolling AVG over the last 5 and 10 games "
-                "(Statcast). Light green when season AVG is above .300."
+                "(Statcast). Green: L10 above .290 with L5 above .250. Orange: "
+                "L5 above .299. Yellow: season above .300 when neither rolling "
+                "rule applies."
             ),
+        ),
+        "batter_score_v1_display": st.column_config.TextColumn(
+            "Batter score v1",
+            help=GLOSSARY["batter_score"],
+        ),
+        "batter_score_v2_display": st.column_config.TextColumn(
+            "Batter score v2",
+            help=GLOSSARY["batter_score_v2"],
         ),
         "pitch_woba": st.column_config.TextColumn(
             f"wOBA vs {pitch_bucket}",
@@ -197,10 +220,16 @@ def _hitters_life_column_config(pitch_bucket: str):
             ),
         ),
         "total_bases_log": st.column_config.TextColumn(
-            "TB per game",
+            "TB per game (L5)",
             help=(
-                "Last 5 games total bases, oldest to newest (space-separated). "
-                "Light green when every game in the log is non-zero."
+                "Total bases in each of the last 5 games (space-separated). "
+                "Leftmost number is the most recent game. "
+                "Colors: blue soarer (2+ TB last three); green money (no zero, "
+                "two+ games 2+ TB); orange hot (one zero — 0 last with 2+ TB "
+                "in two before, or zero elsewhere with 2nd-most-recent 2+ TB "
+                "and one other 2+ TB); yellow warm (1 TB and 2+ TB in last "
+                "two, not 2+2). Super-rare 3+ TB burst also highlights the "
+                "name in red (not shown in legend)."
             ),
         ),
     }
@@ -211,9 +240,20 @@ def _render_hitters_life_dataframe(
     *,
     pitch_bucket: str,
     height: int,
+    sort_by_h2h: bool = True,
 ):
+    display = df
+    if sort_by_h2h and not display.empty:
+        sort_col = "_h2h_avg" if "_h2h_avg" in display.columns else "h2h_avg"
+        if sort_col in display.columns:
+            display = display.sort_values(
+                sort_col,
+                ascending=False,
+                na_position="last",
+            ).reset_index(drop=True)
+
     st.dataframe(
-        style_hitters_life_board(df),
+        style_hitters_life_board(display),
         hide_index=True,
         height=height,
         column_config=_hitters_life_column_config(pitch_bucket),
@@ -242,6 +282,14 @@ def render_hitters_life_board(
     version: str = "v2",
 ):
     """Render the Hitter's Life batting board with game and lineup filters."""
+    st.markdown("##### Batting average")
+    st.caption(
+        "Career and recent AVG, H2H vs the probable starter, pitch-type wOBA, "
+        "Batter Score v1 and v2, and L5 total-bases log (left = most recent). "
+        "Select a game to open the Rotowire lineup filter. "
+        "Light green on season/H2H AVG > .300."
+    )
+    render_tb_log_color_legend()
     markets = st.session_state.get(f"{key_prefix}_markets", [])
     pitch_bucket = st.selectbox(
         "Pitch type wOBA",
@@ -295,17 +343,30 @@ def render_hitters_life_board(
             ))
             away = lineup_context.get("away_abbr") or "—"
             home = lineup_context.get("home_abbr") or "—"
+            away_src = lineup_context.get("away_lineup_source") or "none"
+            home_src = lineup_context.get("home_lineup_source") or "none"
+            away_label = (
+                "Today's Lineup"
+                if away_src == "official"
+                else f"default vs {lineup_context.get('home_sp_hand') or '?'} SP"
+            )
+            home_label = (
+                "Today's Lineup"
+                if home_src == "official"
+                else f"default vs {lineup_context.get('away_sp_hand') or '?'} SP"
+            )
             st.caption(
-                f"**Away ({away})** vs {lineup_context.get('home_sp_hand') or '?'} SP · "
-                f"**Home ({home})** vs {lineup_context.get('away_sp_hand') or '?'} SP"
+                f"**Away ({away})** · {away_label} · "
+                f"**Home ({home})** · {home_label}"
             )
             lineup_filter = st.toggle(
                 "Use Rotowire lineup order",
                 value=True,
                 key=f"{key_prefix}_hitters_life_lineup_filter",
                 help=(
-                    "Keep batters in each team's default lineup vs the opposing "
-                    "starter's throwing hand and sort 1–9."
+                    "Uses Rotowire Today's Lineup when cached (run "
+                    "./run_official_lineups.sh near game time); otherwise "
+                    "default vs the opposing SP hand."
                 ),
             )
 
@@ -323,4 +384,5 @@ def render_hitters_life_board(
         display_df,
         pitch_bucket=pitch_bucket,
         height=min(42 * len(display_df) + 38, 720),
+        sort_by_h2h=not lineup_filter,
     )
