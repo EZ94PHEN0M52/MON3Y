@@ -731,12 +731,15 @@ def feature_parquet_needs_refresh(
         return False
 
     statcast_path = statcast_raw_path(start_date, end_date)
+    required = required_max_game_date(end_date, statcast_path)
+    if max_date < required:
+        return True
+
     statcast_max = parquet_max_game_date(statcast_path)
     if statcast_max is not None:
         return max_date < statcast_max
 
-    required = required_max_game_date(end_date, statcast_path)
-    return max_date < required
+    return False
 
 
 def _feature_prefix(version: str, role: str) -> str:

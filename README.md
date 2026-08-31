@@ -2067,6 +2067,7 @@ Scenario: `./run_daily.sh --skip-props --streamlit` on Sunday morning after Satu
 | **Fresh clone / new machine** | No parquets exist; `--fix` does initial Statcast download + feature build (can take a while) |
 | **Schema bump** | Project updates `PARQUET_FEATURE_SCHEMA_VERSION`; old parquets are invalid and get rebuilt |
 | **Early-morning run** | Baseball Savant may not have posted yesterday yet; re-run later or `fetch_data.py --statcast --force` then `--fix` |
+| **Evening re-run after early fetch** | If the morning pass built parquets while Statcast still stopped at **two days ago**, an evening `./run_daily.sh` used to print **Feature check OK** and skip re-fetch (fixed 2026-08-30 — see [changelog](#2026-08-30--batter-score-by-game-columns-hot-batters-board-tb-log-colors)). Verify max `game_date` in the parquet filename's end date matches **Game logs through** on the player page |
 
 #### What it does **not** do
 
@@ -2343,7 +2344,7 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | "No predictions found" in Streamlit | Run `predict.py` (or `./run_daily.sh`) for the sidebar version |
 | **UD fantasy** shows **—** on batter score board | Re-run `python fetch_data.py --props` (or `python fetch_data.py --underdog-fantasy`). Underdog lines come from [`fetch_underdog_fantasy.py`](fetch_underdog_fantasy.py), not Odds API. Check terminal for **WARNING: Underdog fantasy fetch failed**. Player name must fuzzy-match Underdog's `full_name` |
 | L5/L10 % or player charts show "—" | Rebuild V2 features; player name must match feature parquet `player_name` |
-| Player stats / L5–L10 stuck one day behind (e.g. last game 8/17 on 8/19) | `./run_daily.sh` uses **yesterday** as `--end` (`date -v-1d` on macOS). If the pipeline ran before Statcast posted yesterday's games, `data/raw/statcast_*_{end}.parquet` may exist but max `game_date` is still earlier — `ensure_features.py --fix` now detects this and re-fetches. Manual: `python fetch_data.py --statcast --start 2026-03-25 --end $(date -v-1d +%Y-%m-%d) --force` then re-run `./run_daily.sh`. After rebuild, [`ui/player_stats.py`](ui/player_stats.py) **auto-reloads** when feature parquet mtime changes (no Streamlit restart required). Player page shows **Game logs through YYYY-MM-DD** — verify it matches max `game_date` in `data/processed/*_features_v2_*.parquet` |
+| Player stats / L5–L10 stuck one day behind (e.g. last game 8/28 on 8/30) | `./run_daily.sh` uses **yesterday** as `--end` (`date -v-1d` on macOS) — **today's** box scores never appear until tomorrow's run. If **Game logs through** is more than one day behind **yesterday**, Statcast or features are stale: the raw file may be named `statcast_*_{end}.parquet` while max `game_date` inside is still earlier (common after an early-morning fetch before Savant posts). **`ensure_features.py --fix`** compares feature max to the **MLB schedule date** required for `--end` and re-fetches when behind (fixed 2026-08-30: previously it only compared features to stale Statcast and could report **Feature check OK** while skipping refresh). Manual: `python fetch_data.py --statcast --start 2026-03-25 --end $(date -v-1d +%Y-%m-%d) --force` then re-run `./run_daily.sh`. After rebuild, [`ui/player_stats.py`](ui/player_stats.py) **auto-reloads** when feature parquet mtime changes. Player page **Game logs through YYYY-MM-DD** should match max `game_date` in `data/processed/*_features_v2_*.parquet` |
 | Duplicate **Walk** in market filters / pitcher walks missing | Fixed in [`ui/market_filters.py`](ui/market_filters.py): multiselect options are market **keys** with distinct labels **Batter Walks** / **Pitcher Walks** from [`ui/glossary.py`](ui/glossary.py) `MARKET_LABELS`. Table display uses `market_label()` via [`ui/formatting.py`](ui/formatting.py). Pitcher walks may have few rows but filter correctly when selected |
 | Hitter's Life lineup filter shows **default** not **Today's Lineup** | Lineups not posted yet on Rotowire, or script not run. Run `./run_official_lineups.sh` (or `--watch 300`); reload Streamlit. Check terminal for `skipped: empty lineup`. See [Official lineups](#official-rotowire-lineups-pre-game) |
 | Unknown option in `run_daily.sh` | Use `--train`, `--skip-props`, `--skip-game-lines`, `--skip-probables`, `--streamlit`, or `--help` |
@@ -2658,9 +2659,9 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 
 ---
 
-### 2026-08-30 — Batter score by game columns, hot batters board, TB log colors
+### 2026-08-30 — Batter score by game columns, hot batters board, TB log colors, Statcast refresh fix
 
-**Context:** Hitter's Life **Batter score by game** should surface batting context without duplicating **Game & time** when a Game filter is already present. Main board needed a larger hot-batters shortlist.
+**Context:** Hitter's Life **Batter score by game** should surface batting context without duplicating **Game & time** when a Game filter is already present. Main board needed a larger hot-batters shortlist. Evening `./run_daily.sh` runs could leave L5/TB stats stale when an early-morning Statcast fetch stopped before calendar yesterday.
 
 **Added / changed:**
 - [`ui/batter_score_board.py`](ui/batter_score_board.py) — **Batter score by game** drops **Game & time**; adds **Batting average** and **TB per game (L5)** with the same highlights as the [Batting average board](#hitters-life-board) (TB color legend under the caption)
@@ -2668,7 +2669,10 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 - [`ui/hitters_life_highlights.py`](ui/hitters_life_highlights.py) — TB log **orange hot** rule extended (exactly one zero + ≥3 games with 2+ TB); **yellow warm** path for one zero + two 2+ TB games both in the most recent pair
 - Tests: [`scripts/test_batter_score.py`](scripts/test_batter_score.py), [`scripts/test_main_bottom_boards.py`](scripts/test_main_bottom_boards.py), [`scripts/test_hitters_life.py`](scripts/test_hitters_life.py)
 
-**Board impact:** Display-only on Hitter's Life by-game table and main-board hot batters section. Top 10 batter score and main prop edge/EV unchanged.
+**Fix (Statcast / feature freshness):**
+- [`utils.py`](utils.py) — **`feature_parquet_needs_refresh()`** now compares feature max `game_date` to **`required_max_game_date()`** (last MLB game on or before `--end`) **before** checking whether features merely match stale Statcast. **Symptom:** after a morning run, an evening `./run_daily.sh` printed **Feature check OK** even though `statcast_*_{yesterday}.parquet` and feature parquets still stopped at **two days ago** — TB log, L5/L10, and **Game logs through** looked one+ slate behind. **After fix:** `ensure_features.py --fix` re-fetches Statcast and rebuilds when features are behind the schedule date.
+
+**Board impact:** Display-only on Hitter's Life by-game table and main-board hot batters section. Top 10 batter score and main prop edge/EV unchanged. Rolling stats refresh when features rebuild.
 
 ---
 
@@ -2882,7 +2886,7 @@ Duplicate prevention on `(player, market, side, line, book)`. Picks stored in `s
 **Root cause (stats):** `fetch_statcast()` returned early when `statcast_{start}_{end}.parquet` existed, without checking whether `max(game_date)` reached `--end`. `ensure_features.py --fix` also skipped re-fetch in that case.
 
 **Fix:**
-- [`utils.py`](utils.py) — `statcast_needs_refresh()`, `parquet_max_game_date()`, `feature_parquet_needs_refresh()`
+- [`utils.py`](utils.py) — `statcast_needs_refresh()`, `parquet_max_game_date()`, `feature_parquet_needs_refresh()` (compares features to MLB schedule date via `required_max_game_date()`, not only stale Statcast max)
 - [`fetch_data.py`](fetch_data.py) — re-fetch when cached Statcast stops before `--end`; new `--force` flag
 - [`scripts/ensure_features.py`](scripts/ensure_features.py) — stale-data detection triggers Statcast re-fetch + feature rebuild
 - [`ui/player_stats.py`](ui/player_stats.py) — feature parquet cache keyed by file mtime (reload after rebuild without process restart)
