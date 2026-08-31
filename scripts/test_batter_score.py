@@ -1031,6 +1031,9 @@ def test_build_all_batter_score_df_includes_avg_and_tb_columns():
         "ui.batter_score_board.lookup_batter_score_v2",
         return_value=mock_result,
     ), patch(
+        "ui.batter_score_board.lookup_arsenal_weighted_woba",
+        return_value=0.345,
+    ), patch(
         "ui.batter_score_board.format_batting_average_column",
         return_value="Szn .290 · L5 .310 · L10 .270",
     ), patch(
@@ -1040,6 +1043,8 @@ def test_build_all_batter_score_df_includes_avg_and_tb_columns():
         all_df = build_all_batter_score_df(props, version="v2")
 
     assert "batting_average" in all_df.columns
+    assert "arsenal_woba" in all_df.columns
+    assert all_df.iloc[0]["arsenal_woba"] == ".345"
     assert "total_bases_log" in all_df.columns
     assert all_df.iloc[0]["batting_average"] == "Szn .290 · L5 .310 · L10 .270"
     assert all_df.iloc[0]["total_bases_log"] == "2 1 0 3 4"

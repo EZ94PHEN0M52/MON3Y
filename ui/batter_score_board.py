@@ -13,7 +13,9 @@ from batter_score_data import (
 )
 from hitters_life_data import (
     format_batting_average_column,
+    format_pitch_woba,
     format_total_bases_game_log,
+    lookup_arsenal_weighted_woba,
 )
 from ui.batter_score import format_batter_score_display
 from ui.batter_score_highlights import (
@@ -55,6 +57,7 @@ BATTER_SCORE_BY_GAME_DISPLAY_COLUMNS = [
     "player_link",
     "opposing_sp",
     "vs_pitcher",
+    "arsenal_woba",
     "batting_average",
     "pp_fantasy_line",
     "ud_fantasy_line",
@@ -349,6 +352,12 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
     if for_game_board:
         batting_average = format_batting_average_column(row["player"], version)
         tb_log = format_total_bases_game_log(row["player"], version=version)
+        arsenal_woba = lookup_arsenal_weighted_woba(
+            row["player"],
+            version,
+            game_context,
+        )
+        built["arsenal_woba"] = format_pitch_woba(arsenal_woba)
         built["batting_average"] = batting_average
         built["total_bases_log"] = tb_log
         built["_batting_average"] = batting_average
@@ -408,6 +417,13 @@ def render_top_batter_scores(
 def _batter_score_by_game_column_config():
     config = _batter_score_table_column_config()
     config.pop("game_time", None)
+    config["arsenal_woba"] = st.column_config.TextColumn(
+        "Arsenal wOBA",
+        help=(
+            "Usage-weighted career wOBA vs the opposing SP's pitch mix "
+            "(last 5 starts), by pitch bucket."
+        ),
+    )
     config["batting_average"] = st.column_config.TextColumn(
         "Batting average",
         help=(

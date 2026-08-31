@@ -700,6 +700,60 @@ def required_max_game_date(
     return pd.Timestamp(end_date).date()
 
 
+def same_day_statcast_grace(
+    end_date: str,
+    statcast_max: date | None,
+    feature_max: date | None,
+    required: date,
+) -> bool:
+    """True when --end is today, features match Statcast, but Savant has not posted yet.
+
+    Covers ``--include-today`` evening runs: MLB scheduled games on calendar
+    today, but pybaseball/Statcast still stops at yesterday. Accept the
+    best available shard instead of failing the pipeline after a re-fetch.
+    """
+    end = pd.Timestamp(end_date).date()
+    if end != date.today():
+        return False
+    if statcast_max is None or feature_max is None:
+        return False
+    if feature_max != statcast_max:
+        return False
+    if statcast_max >= required:
+        return False
+
+    yesterday = date.today() - timedelta(days=1)
+    return statcast_max >= yesterday
+
+
+def features_caught_up_to_statcast(
+    start_date: str,
+    end_date: str,
+    version: str = "v2",
+) -> tuple[bool, date | None, date | None]:
+    """True when batter/pitcher parquets match Statcast's latest game_date.
+
+    Returns ``(ok, statcast_max, required)`` for warning messages. ``ok`` means
+    features are as fresh as Savant allows but still behind the MLB schedule.
+    """
+    version = normalize_version(version)
+    statcast_path = statcast_raw_path(start_date, end_date)
+    statcast_max = parquet_max_game_date(statcast_path)
+    if statcast_max is None:
+        return False, None, None
+
+    required = required_max_game_date(end_date, statcast_path)
+    for path_fn in (batter_features_path, pitcher_features_path):
+        path = path_fn(start_date, end_date, version)
+        if not path.exists():
+            return False, statcast_max, required
+        feature_max = parquet_max_game_date(path)
+        if feature_max != statcast_max:
+            return False, statcast_max, required
+
+    return statcast_max < required, statcast_max, required
+
+
 def statcast_needs_refresh(
     start_date: str,
     end_date: str,
@@ -714,7 +768,11 @@ def statcast_needs_refresh(
         return True
 
     required = required_max_game_date(end_date, path)
-    return max_date < required
+    if max_date < required:
+        if same_day_statcast_grace(end_date, max_date, max_date, required):
+            return False
+        return True
+    return False
 
 
 def feature_parquet_needs_refresh(
@@ -731,13 +789,21 @@ def feature_parquet_needs_refresh(
         return False
 
     statcast_path = statcast_raw_path(start_date, end_date)
+    statcast_max = parquet_max_game_date(statcast_path)
     required = required_max_game_date(end_date, statcast_path)
-    if max_date < required:
+
+    if statcast_max is not None and max_date < statcast_max:
         return True
 
-    statcast_max = parquet_max_game_date(statcast_path)
-    if statcast_max is not None:
-        return max_date < statcast_max
+    if max_date < required:
+        if same_day_statcast_grace(
+            end_date,
+            statcast_max,
+            max_date,
+            required,
+        ):
+            return False
+        return True
 
     return False
 

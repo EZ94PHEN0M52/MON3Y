@@ -29,6 +29,7 @@ from train import (  # noqa: E402
 )
 from utils import (  # noqa: E402
     batter_features_path,
+    features_caught_up_to_statcast,
     feature_parquet_needs_refresh,
     live_fetch_disabled,
     normalize_version,
@@ -189,6 +190,19 @@ def check_range(
             )
 
     return issues
+
+
+def _issues_are_stale_data_only(issues: list[FeatureIssue]) -> bool:
+    if not issues:
+        return False
+    return all(
+        not issue.missing_file
+        and not issue.missing_columns
+        and not issue.stale_schema
+        and not issue.stale_sources
+        and issue.stale_data
+        for issue in issues
+    )
 
 
 def describe_issue(issue: FeatureIssue) -> str:
@@ -428,6 +442,20 @@ def main() -> int:
 
     remaining = check_range(args.start, args.end, version)
     if remaining:
+        caught_up, statcast_max, required = features_caught_up_to_statcast(
+            args.start,
+            args.end,
+            version,
+        )
+        if _issues_are_stale_data_only(remaining) and caught_up:
+            print(
+                "Feature check OK with Statcast posting lag: "
+                f"latest game_date {statcast_max} "
+                f"(MLB schedule through {required} not on Savant yet). "
+                "Re-run ./run_daily.sh later when Game logs through advances."
+            )
+            return 0
+
         print_issues(args.start, args.end, version, remaining)
         print("Feature rebuild did not resolve all issues.")
         return 1
