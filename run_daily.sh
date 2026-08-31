@@ -8,8 +8,8 @@
 #   ./run_daily.sh --skip-props # skip Odds API prop fetch (use cached props)
 #   ./run_daily.sh --skip-game-lines # skip game totals/spreads fetch
 #   ./run_daily.sh --skip-probables # skip MLB probable SP fetch
-#   ./run_daily.sh --streamlit  # launch Streamlit app after pipeline
-#   ./run_daily.sh --train --streamlit
+#   ./run_daily.sh --include-today  # feature window through today (evening, after games + Statcast)
+#   ./run_daily.sh --streamlit --include-today
 #   ./run_daily.sh --streamlit --port 8502
 #
 # Intraday snapshots (Phase 4): fetch_data.py --props appends to
@@ -30,7 +30,6 @@ cd "$SCRIPT_DIR"
 source .venv/bin/activate
 
 SEASON_START=2026-03-25
-YESTERDAY=$(date -v-1d +%Y-%m-%d)
 
 TRAIN_START=2025-04-01
 TRAIN_END=2025-06-30
@@ -40,6 +39,7 @@ RUN_STREAMLIT=false
 SKIP_PROPS=false
 SKIP_GAME_LINES=false
 SKIP_PROBABLES=false
+INCLUDE_TODAY=false
 STREAMLIT_PORT=8501
 
 while [[ $# -gt 0 ]]; do
@@ -64,6 +64,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_PROBABLES=true
       shift
       ;;
+    --include-today)
+      INCLUDE_TODAY=true
+      shift
+      ;;
     --port)
       if [[ -z "${2:-}" || "$2" == --* ]]; then
         echo "Error: --port requires a port number" >&2
@@ -73,25 +77,33 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      sed -n '2,11p' "$0" | sed 's/^# \?//'
+      sed -n '2,13p' "$0" | sed 's/^# \?//'
       exit 0
       ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--streamlit] [--port PORT]" >&2
+      echo "Usage: $0 [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--include-today] [--streamlit] [--port PORT]" >&2
       exit 1
       ;;
   esac
 done
 
+if $INCLUDE_TODAY; then
+  FEATURE_END=$(date +%Y-%m-%d)
+  FEATURE_END_LABEL="today"
+else
+  FEATURE_END=$(date -v-1d +%Y-%m-%d)
+  FEATURE_END_LABEL="yesterday"
+fi
+
 echo "=== MLB Prop Model V2 pipeline ==="
-echo "Season start: $SEASON_START | End (yesterday): $YESTERDAY"
+echo "Season start: $SEASON_START | Feature end ($FEATURE_END_LABEL): $FEATURE_END"
 echo ""
 
-echo ">>> Checking inference features ($SEASON_START → $YESTERDAY, v2)..."
+echo ">>> Checking inference features ($SEASON_START → $FEATURE_END, v2)..."
 if ! python scripts/ensure_features.py \
   --start "$SEASON_START" \
-  --end "$YESTERDAY" \
+  --end "$FEATURE_END" \
   --version v2 \
   --fix; then
   echo "Feature ensure failed for inference window; aborting pipeline." >&2
@@ -140,7 +152,7 @@ if $RUN_TRAIN; then
 fi
 
 echo ">>> Generating predictions..."
-python predict.py --start "$SEASON_START" --end "$YESTERDAY" --version v2
+python predict.py --start "$SEASON_START" --end "$FEATURE_END" --version v2
 
 echo ""
 echo "=== Pipeline complete ==="

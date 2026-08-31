@@ -302,8 +302,8 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 
 | When | Command | Why |
 |------|---------|-----|
-| **Evening** (~8pm PT, props live) | `./run_daily.sh --streamlit` | Fresh props, game lines, and probables for **tomorrow’s slate**; scores the board. Do **not** use `--skip-props` or `--skip-probables` — you want new lines and SP names. |
-| **Next morning** (Statcast posted) | `./run_daily.sh --skip-props --streamlit` | Refreshes rolling stats through **calendar yesterday** without overwriting last night’s pre-game lines. |
+| **Evening** (~8pm PT, props live) | `./run_daily.sh --streamlit` | Fresh props, game lines, and probables for **tomorrow’s slate**; scores the board. Do **not** use `--skip-props` or `--skip-probables` — you want new lines and SP names. Add **`--include-today`** after today’s games finish and Statcast has posted if you want **TB per game**, L5/L10, and rolling form through **today** on the board (see [run_daily.sh flags](#run_dailysh--pipeline-flags)). |
+| **Next morning** (Statcast posted) | `./run_daily.sh --skip-props --streamlit` | Refreshes rolling stats through **calendar yesterday** without overwriting last night’s pre-game lines. Use **`--include-today`** only if you still need same-day box scores from a prior evening. |
 | **Pre-game** (~1–2 hr before first pitch) | `./run_official_lineups.sh` | Pulls Rotowire **Today's Lineup** for slate teams → [Hitter's Life](#hitters-life-board) lineup filter uses official 1–9 order (see [Official lineups](#official-rotowire-lineups-pre-game)). Reload Streamlit after. |
 
 **What lines up correctly on the evening run:**
@@ -315,7 +315,7 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 - **Over % / Edge / EV** — computed at predict time from each player’s latest feature row (main LightGBM classifiers).
 - **Stuff K (v2)** — on **Pitcher Strikeouts** rows only, if `models/v2/pitcher_strikeouts_stuff.pkl` exists; shows expected K and Poisson Over % from Statcast SwStr/chase/velocity (does **not** change Edge/EV). First-time setup: [`./run_pitcher_strikeout_stuff.sh`](#run_pitcher_strikeout_stuffsh--stuff-k-v2-pipeline).
 
-**One timing caveat:** `run_daily.sh` uses `YESTERDAY=$(date -v-1d)` for features. On an **evening** run, that is still **calendar yesterday**, so today’s just-finished box scores are **not** in rolling stats yet — the board is correct for tomorrow’s lines, but L5/L10 and model form are **one slate behind** until the morning pass. Check the player page caption **Game logs through YYYY-MM-DD** to confirm feature freshness.
+**One timing caveat:** By default, `run_daily.sh` uses **yesterday** as the feature/`predict` end date (`date -v-1d`). On an **evening** run, today’s just-finished box scores are **not** in rolling stats unless you pass **`--include-today`** (after Statcast has posted — often late evening). That flag extends Statcast fetch, feature rebuild, and predict through **calendar today**, so **TB per game (L5)**, batting AVG windows, and L5/L10 can show same-day games. Check the player page caption **Game logs through YYYY-MM-DD** to confirm freshness.
 
 **Terminal checks after the evening run:** look for `OK — SP prop coverage looks complete` and probables counts (`primary day has N home / M away SP named`). If Batter Score shows **Partial · SP TBD** everywhere, re-run `python fetch_data.py --probables` once MLB has named starters.
 
@@ -1805,7 +1805,7 @@ Detailed flags, when to use them, and how each script fits the daily pipeline. S
 Main entry point for the V2 daily loop. Activates `.venv` automatically — no manual `source` needed.
 
 ```bash
-./run_daily.sh [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--streamlit] [--port N]
+./run_daily.sh [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--include-today] [--streamlit] [--port N]
 ./run_daily.sh --help
 ```
 
@@ -1814,14 +1814,15 @@ Main entry point for the V2 daily loop. Activates `.venv` automatically — no m
 | Step | Script | Skipped by |
 |------|--------|------------|
 | 1 | `scripts/ensure_features.py --fix` | Never — always runs |
-| 2 | `fetch_data.py --props` | `--skip-props` |
-| 3 | `fetch_data.py --game-lines` | `--skip-game-lines` |
-| 4 | `fetch_data.py --probables` | `--skip-probables` |
-| 5 | `train.py` (optional) | Only with `--train` |
-| 6 | `predict.py` | Never |
-| 7 | `streamlit run app.py` | Only with `--streamlit` |
+| 2 | `scripts/build_pp_fantasy_scores.py` | Never — always runs |
+| 3 | `fetch_data.py --props` | `--skip-props` |
+| 4 | `fetch_data.py --game-lines` | `--skip-game-lines` |
+| 5 | `fetch_data.py --probables` | `--skip-probables` |
+| 6 | `train.py` (optional) | Only with `--train` |
+| 7 | `predict.py` | Never |
+| 8 | `streamlit run app.py` | Only with `--streamlit` |
 
-Date context: `SEASON_START=2026-03-25`, `YESTERDAY=$(date -v-1d +%Y-%m-%d)` (macOS). Feature validation and predict both use **season start → yesterday** — not today’s date.
+Date context: `SEASON_START=2026-03-25`. By default, feature validation and `predict.py` use **season start → yesterday** (`date -v-1d` on macOS). With **`--include-today`**, both use **through calendar today** so finished same-day games can appear in TB log, L5/L10, and rolling features when Statcast has posted.
 
 #### Flags
 
@@ -1832,6 +1833,7 @@ Date context: `SEASON_START=2026-03-25`, `YESTERDAY=$(date -v-1d +%Y-%m-%d)` (ma
 | `--skip-props` | Skips Odds API prop fetch; uses `data/processed/current_props.parquet` | Odds API quota exhausted; games already started and you want pre-game lines; re-predict without burning credits |
 | `--skip-game-lines` | Skips totals/spreads fetch; uses `data/processed/current_game_lines.parquet` | Re-run predict with cached game context |
 | `--skip-probables` | Skips MLB Stats API probables; uses `data/processed/daily_probables.parquet` | SP list unchanged; save API calls on repeat runs |
+| `--include-today` | Feature window and `predict.py --end` use **calendar today** instead of yesterday | **Late evening** after today’s games finish and Statcast has posted — refreshes **TB per game (L5)**, batting AVG, L5/L10 through today. No effect if Savant has not posted yet (re-run later or use morning default) |
 | `--streamlit` | Launches Streamlit after predict | Daily board workflow |
 | `--port N` | Streamlit port (default `8501`) | Multiple apps or port conflict — use with `--streamlit` |
 
@@ -1842,6 +1844,7 @@ Skip flags are **independent** — combine as needed (e.g. all three skips + `--
 | Command | Use case |
 |---------|----------|
 | `./run_daily.sh --streamlit` | **Evening** — props just posted (~8pm PT); full fetch + board for tomorrow |
+| `./run_daily.sh --streamlit --include-today` | **Late evening** — same as above **plus** rolling stats through **today** (TB log, L5/L10) when Statcast has posted |
 | `./run_daily.sh --skip-props --streamlit` | **Morning** — refresh Statcast/form; keep last night’s pre-game lines |
 | `./run_daily.sh` | Standard full refresh (any time) |
 | `./run_daily.sh --skip-props --skip-probables --streamlit` | Minimal API usage — only feature check may hit Statcast if stale |
@@ -2344,7 +2347,7 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | "No predictions found" in Streamlit | Run `predict.py` (or `./run_daily.sh`) for the sidebar version |
 | **UD fantasy** shows **—** on batter score board | Re-run `python fetch_data.py --props` (or `python fetch_data.py --underdog-fantasy`). Underdog lines come from [`fetch_underdog_fantasy.py`](fetch_underdog_fantasy.py), not Odds API. Check terminal for **WARNING: Underdog fantasy fetch failed**. Player name must fuzzy-match Underdog's `full_name` |
 | L5/L10 % or player charts show "—" | Rebuild V2 features; player name must match feature parquet `player_name` |
-| Player stats / L5–L10 stuck one day behind (e.g. last game 8/28 on 8/30) | `./run_daily.sh` uses **yesterday** as `--end` (`date -v-1d` on macOS) — **today's** box scores never appear until tomorrow's run. If **Game logs through** is more than one day behind **yesterday**, Statcast or features are stale: the raw file may be named `statcast_*_{end}.parquet` while max `game_date` inside is still earlier (common after an early-morning fetch before Savant posts). **`ensure_features.py --fix`** compares feature max to the **MLB schedule date** required for `--end` and re-fetches when behind (fixed 2026-08-30: previously it only compared features to stale Statcast and could report **Feature check OK** while skipping refresh). Manual: `python fetch_data.py --statcast --start 2026-03-25 --end $(date -v-1d +%Y-%m-%d) --force` then re-run `./run_daily.sh`. After rebuild, [`ui/player_stats.py`](ui/player_stats.py) **auto-reloads** when feature parquet mtime changes. Player page **Game logs through YYYY-MM-DD** should match max `game_date` in `data/processed/*_features_v2_*.parquet` |
+| Player stats / L5–L10 stuck one day behind (e.g. last game 8/28 on 8/30) | Default `./run_daily.sh` uses **yesterday** as `--end` — **today's** box scores need **`--include-today`** (late evening, after Statcast posts) or wait until tomorrow's run. If **Game logs through** is more than one day behind **yesterday** (or **today** with `--include-today`), Statcast or features are stale: the raw file may be named `statcast_*_{end}.parquet` while max `game_date` inside is still earlier (common after an early-morning fetch before Savant posts). **`ensure_features.py --fix`** compares feature max to the **MLB schedule date** required for `--end` and re-fetches when behind (fixed 2026-08-30: previously it only compared features to stale Statcast and could report **Feature check OK** while skipping refresh). Manual: `python fetch_data.py --statcast --start 2026-03-25 --end $(date +%Y-%m-%d) --force` (or `date -v-1d` for yesterday) then re-run `./run_daily.sh`. After rebuild, [`ui/player_stats.py`](ui/player_stats.py) **auto-reloads** when feature parquet mtime changes. Player page **Game logs through YYYY-MM-DD** should match max `game_date` in `data/processed/*_features_v2_*.parquet` |
 | Duplicate **Walk** in market filters / pitcher walks missing | Fixed in [`ui/market_filters.py`](ui/market_filters.py): multiselect options are market **keys** with distinct labels **Batter Walks** / **Pitcher Walks** from [`ui/glossary.py`](ui/glossary.py) `MARKET_LABELS`. Table display uses `market_label()` via [`ui/formatting.py`](ui/formatting.py). Pitcher walks may have few rows but filter correctly when selected |
 | Hitter's Life lineup filter shows **default** not **Today's Lineup** | Lineups not posted yet on Rotowire, or script not run. Run `./run_official_lineups.sh` (or `--watch 300`); reload Streamlit. Check terminal for `skipped: empty lineup`. See [Official lineups](#official-rotowire-lineups-pre-game) |
 | Unknown option in `run_daily.sh` | Use `--train`, `--skip-props`, `--skip-game-lines`, `--skip-probables`, `--streamlit`, or `--help` |
@@ -2671,6 +2674,9 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 
 **Fix (Statcast / feature freshness):**
 - [`utils.py`](utils.py) — **`feature_parquet_needs_refresh()`** now compares feature max `game_date` to **`required_max_game_date()`** (last MLB game on or before `--end`) **before** checking whether features merely match stale Statcast. **Symptom:** after a morning run, an evening `./run_daily.sh` printed **Feature check OK** even though `statcast_*_{yesterday}.parquet` and feature parquets still stopped at **two days ago** — TB log, L5/L10, and **Game logs through** looked one+ slate behind. **After fix:** `ensure_features.py --fix` re-fetches Statcast and rebuilds when features are behind the schedule date.
+
+**Follow-up (`--include-today`):**
+- [`run_daily.sh`](run_daily.sh) — **`--include-today`** sets the feature/`predict` end date to **calendar today** (default remains **yesterday**). Use on **late evening** runs when today’s games are finished and Statcast has posted, so **TB per game (L5)** and other rolling batter stats can include same-day games on the board.
 
 **Board impact:** Display-only on Hitter's Life by-game table and main-board hot batters section. Top 10 batter score and main prop edge/EV unchanged. Rolling stats refresh when features rebuild.
 
