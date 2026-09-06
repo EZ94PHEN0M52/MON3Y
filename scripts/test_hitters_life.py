@@ -174,7 +174,85 @@ def test_format_h2h_avg_display():
     assert format_h2h_avg_display(0.250, hits=1, ab=4) == "1/4 .250"
 
 
-def test_build_hitters_life_row_includes_batter_score_v1():
+def test_pa_woba_xwoba_parts_savant_rules():
+    from hitters_life_data import _pa_woba_xwoba_parts
+
+    k = _pa_woba_xwoba_parts("strikeout", 0.0, 1.0, None)
+    assert k == (0.0, 0.0, 1.0)
+
+    walk = _pa_woba_xwoba_parts("walk", 0.69, 1.0, 0.400)
+    assert walk == (0.69, 0.69, 1.0)
+
+    bip = _pa_woba_xwoba_parts("single", 0.88, 1.0, 0.420)
+    assert bip == (0.88, 0.420, 1.0)
+
+    bip_fallback = _pa_woba_xwoba_parts("double", 1.25, 1.0, None)
+    assert bip_fallback == (1.25, 1.25, 1.0)
+
+
+def test_wrc_plus_from_woba():
+    from hitters_life_data import _wrc_plus_from_woba
+
+    # League-average hitter -> ~100
+    wrc = _wrc_plus_from_woba(0.320, 0.320, 1.247, 0.117)
+    assert wrc is not None
+    assert abs(wrc - 100.0) < 0.01
+
+    elite = _wrc_plus_from_woba(0.400, 0.320, 1.247, 0.117)
+    assert elite is not None
+    assert elite > 100
+
+
+def test_xwoba_and_wrc_plus_windows_from_games():
+    from hitters_life_data import (
+        _woba_rate_from_games,
+        _wrc_plus_from_games,
+        format_wrc_plus_column,
+        format_xwoba_column,
+    )
+
+    games = (
+        ("2026-04-01", 0.69, 0.69, 1.0),
+        ("2026-04-02", 0.88, 0.420, 1.0),
+        ("2026-04-03", 0.0, 0.0, 1.0),
+        ("2026-04-04", 1.25, 0.950, 1.0),
+        ("2026-04-05", 0.69, 0.69, 1.0),
+    )
+    season_x = _woba_rate_from_games(games, use_xwoba=True)
+    l5_x = _woba_rate_from_games(games, window=5, use_xwoba=True)
+    l10_x = _woba_rate_from_games(games, window=10, use_xwoba=True)
+    assert season_x is not None
+    assert l5_x is not None
+    assert abs(season_x - l5_x) < 1e-6
+    assert l10_x is not None
+    assert abs(season_x - l10_x) < 1e-6
+
+    constants = (0.320, 1.247, 0.117)
+    season_wrc = _wrc_plus_from_games(games, constants)
+    l30_wrc = _wrc_plus_from_games(games, constants, window=3)
+    assert season_wrc is not None
+    assert l30_wrc is not None
+
+    from unittest.mock import patch
+
+    with patch(
+        "hitters_life_data.lookup_xwoba_windows",
+        return_value=(0.380, 0.330),
+    ):
+        assert format_xwoba_column("Player", "v2") == (
+            "L5 .380 · L10 .330"
+        )
+
+    with patch(
+        "hitters_life_data.lookup_wrc_plus_windows",
+        return_value=(98.0, 105.0),
+    ):
+        assert format_wrc_plus_column("Player", "v2") == (
+            "L30 98 · L10 105"
+        )
+
+
+def test_build_hitters_life_row_includes_batter_scores_and_fantasy():
     from unittest.mock import MagicMock, patch
 
     from hitters_life_data import build_hitters_life_row
@@ -186,6 +264,10 @@ def test_build_hitters_life_row_includes_batter_score_v1():
     )
     mock_result_v2 = MagicMock(
         batter_score=72.1,
+        partial_label="Full",
+    )
+    mock_result_v3 = MagicMock(
+        batter_score=74.0,
         partial_label="Full",
     )
     row = pd.Series(
@@ -205,6 +287,12 @@ def test_build_hitters_life_row_includes_batter_score_v1():
         "batter_score_data.lookup_batter_score_v2",
         return_value=mock_result_v2,
     ), patch(
+        "batter_score_data.lookup_batter_score_v3",
+        return_value=MagicMock(
+            batter_score=74.0,
+            partial_label="Full",
+        ),
+    ), patch(
         "hitters_life_data.build_vs_pitcher_fields",
         return_value={
             "opposing_sp": "—",
@@ -220,11 +308,20 @@ def test_build_hitters_life_row_includes_batter_score_v1():
         "hitters_life_data.lookup_arsenal_weighted_woba",
         return_value=None,
     ), patch(
-        "hitters_life_data.lookup_sp_arsenal_usage",
-        return_value={},
+        "ui.player_stats.format_prizepicks_fantasy_line",
+        return_value="6.5",
+    ), patch(
+        "ui.player_stats.format_underdog_fantasy_line",
+        return_value="6.0",
     ), patch(
         "hitters_life_data.format_batting_average_column",
         return_value="Szn .280 · L5 .300 · L10 .290",
+    ), patch(
+        "hitters_life_data.format_xwoba_column",
+        return_value="L5 .380 · L10 .330",
+    ), patch(
+        "hitters_life_data.format_wrc_plus_column",
+        return_value="L30 98 · L10 105",
     ), patch(
         "hitters_life_data.format_total_bases_game_log",
         return_value="1 2 0 1 3",
@@ -234,9 +331,12 @@ def test_build_hitters_life_row_includes_batter_score_v1():
     ):
         built = build_hitters_life_row(row, "v2", pitch_bucket="Fastball")
 
-    assert built["batter_score_v1_display"] == "68.4"
     assert built["batter_score_v2_display"] == "72.1 (Full)"
-    assert built["_batter_score"] == 68.4
+    assert built["batter_score_v3_display"] == "74.0 (Full)"
+    assert built["pp_fantasy_line"] == "6.5"
+    assert built["ud_fantasy_line"] == "6.0"
+    assert "batter_score_v1_display" not in built
+    assert "sp_arsenal" not in built
 
 
 def test_format_total_bases_game_log():
@@ -333,7 +433,10 @@ if __name__ == "__main__":
     test_sp_arsenal_column()
     test_aggregate_pitcher_arsenal_usage_detailed()
     test_format_h2h_avg_display()
+    test_pa_woba_xwoba_parts_savant_rules()
+    test_wrc_plus_from_woba()
+    test_xwoba_and_wrc_plus_windows_from_games()
     test_format_total_bases_game_log()
-    test_build_hitters_life_row_includes_batter_score_v1()
+    test_build_hitters_life_row_includes_batter_scores_and_fantasy()
     test_hitters_life_board_highlights()
     print("OK")

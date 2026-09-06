@@ -196,27 +196,44 @@ def _hitters_life_column_config(pitch_bucket: str):
                 "rule applies."
             ),
         ),
-        "batter_score_v1_display": st.column_config.TextColumn(
-            "Batter score v1",
-            help=GLOSSARY["batter_score"],
+        "xwoba": st.column_config.TextColumn(
+            "xwOBA",
+            help=(
+                "Expected wOBA (Statcast): last 5 and last 10 games. "
+                "L5 is listed first for sorting. Contact uses "
+                "estimated_woba_using_speedangle; walks, HBP, and "
+                "strikeouts use Savant wOBA weights."
+            ),
+        ),
+        "wrc_plus": st.column_config.TextColumn(
+            "wRC+",
+            help=(
+                "Weighted runs created plus (100 = league average): last 30 "
+                "and last 10 games (pooled PAs). L30 is listed first so the "
+                "column sorts by recent production."
+            ),
+        ),
+        "pp_fantasy_line": st.column_config.TextColumn(
+            "PP fantasy",
+            help=GLOSSARY["pp_fantasy_line"],
+        ),
+        "ud_fantasy_line": st.column_config.TextColumn(
+            "UD fantasy",
+            help=GLOSSARY["ud_fantasy_line"],
         ),
         "batter_score_v2_display": st.column_config.TextColumn(
             "Batter score v2",
             help=GLOSSARY["batter_score_v2"],
+        ),
+        "batter_score_v3_display": st.column_config.TextColumn(
+            "Batter score v3",
+            help=GLOSSARY["batter_score_v3"],
         ),
         "pitch_woba": st.column_config.TextColumn(
             f"wOBA vs {pitch_bucket}",
             help=(
                 f"Career wOBA vs {pitch_bucket} pitches (Statcast balls in play). "
                 "Change pitch type with the selector above the table."
-            ),
-        ),
-        "sp_arsenal": st.column_config.TextColumn(
-            "SP arsenal",
-            help=(
-                "Individual pitch types in the opposing starter's arsenal over "
-                "their last 5 starts (Baseball Savant names from Statcast), "
-                "sorted by usage."
             ),
         ),
         "total_bases_log": st.column_config.TextColumn(
@@ -284,10 +301,10 @@ def render_hitters_life_board(
     """Render the Hitter's Life batting board with game and lineup filters."""
     st.markdown("##### Batting average")
     st.caption(
-        "Career and recent AVG, H2H vs the probable starter, pitch-type wOBA, "
-        "Batter Score v1 and v2, and L5 total-bases log (left = most recent). "
-        "Select a game to open the Rotowire lineup filter. "
-        "Light green on season/H2H AVG > .300."
+        "Career and recent AVG, xwOBA, wRC+, PP/UD fantasy lines, H2H vs the "
+        "probable starter, pitch-type wOBA, Batter Score v2/v3, and L5 "
+        "total-bases log (left = most recent). Select a game to open the "
+        "Rotowire lineup filter. Light green on season/H2H AVG > .300."
     )
     render_tb_log_color_legend()
     markets = st.session_state.get(f"{key_prefix}_markets", [])

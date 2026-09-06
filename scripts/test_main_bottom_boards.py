@@ -119,6 +119,7 @@ def test_build_hot_batter_score_df_filters_and_limits() -> None:
             "_batter_score": row["batter_score"],
             "batter_score_display": str(row["batter_score"]),
             "batter_score_v2_display": str(row["batter_score"]),
+            "batter_score_v3_display": str(row["batter_score"]),
             "player_link": row["player"],
             "game_time": "7:05p",
             "opposing_sp": "SP",
@@ -134,6 +135,18 @@ def test_build_hot_batter_score_df_filters_and_limits() -> None:
     ), patch(
         "ui.main_bottom_boards.format_total_bases_game_log",
         return_value="2 1 0 1 3",
+    ), patch(
+        "ui.main_bottom_boards.format_xwoba_column",
+        return_value="L5 .380 · L10 .330",
+    ), patch(
+        "ui.main_bottom_boards.format_wrc_plus_column",
+        return_value="L30 98 · L10 105",
+    ), patch(
+        "ui.main_bottom_boards.lookup_arsenal_weighted_woba",
+        return_value=0.340,
+    ), patch(
+        "ui.main_bottom_boards.format_pitch_woba",
+        return_value=".340",
     ):
         built = build_hot_batter_score_df(
             pd.DataFrame(),
@@ -144,6 +157,32 @@ def test_build_hot_batter_score_df_filters_and_limits() -> None:
     assert len(built) == 1
     assert built.iloc[0]["player"] == "Alpha"
     assert built.iloc[0]["total_bases_log"] == "2 1 0 1 3"
+    assert built.iloc[0]["arsenal_woba"] == ".340"
+    assert built.iloc[0]["xwoba"] == "L5 .380 · L10 .330"
+    assert built.iloc[0]["wrc_plus"] == "L30 98 · L10 105"
+    from ui.main_bottom_boards import HOT_BATTER_SCORE_COLUMNS
+
+    assert "game_time" not in HOT_BATTER_SCORE_COLUMNS
+
+
+def test_default_visible_board_columns_hides_odds_detail() -> None:
+    from ui.board import (
+        BOARD_DEFAULT_HIDDEN_COLUMNS,
+        _default_visible_board_columns,
+    )
+
+    columns = [
+        "player_link",
+        "bookmaker",
+        "calibrated_probability",
+        "devigged_market_prob",
+        "best_book",
+        "line_delta",
+        "edge",
+    ]
+    visible = _default_visible_board_columns(columns)
+    assert "edge" in visible
+    assert BOARD_DEFAULT_HIDDEN_COLUMNS.isdisjoint(visible)
 
 
 def test_hot_batter_score_ties_use_batting_avg_priority() -> None:
@@ -194,5 +233,6 @@ if __name__ == "__main__":
     test_build_market_top_props_df_three_per_side_per_market()
     test_batting_average_has_board_highlight_rules()
     test_build_hot_batter_score_df_filters_and_limits()
+    test_default_visible_board_columns_hides_odds_detail()
     test_hot_batter_score_ties_use_batting_avg_priority()
     print("OK")

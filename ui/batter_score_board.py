@@ -9,6 +9,7 @@ from batter_score_data import (
     is_batter_score_validated,
     lookup_batter_score,
     lookup_batter_score_v2,
+    lookup_batter_score_v3,
     lookup_h2h_board_stats,
 )
 from hitters_life_data import (
@@ -64,6 +65,7 @@ BATTER_SCORE_BY_GAME_DISPLAY_COLUMNS = [
     "l5_l10_pct",
     "batter_score_display",
     "batter_score_v2_display",
+    "batter_score_v3_display",
     "total_bases_log",
 ]
 
@@ -294,6 +296,11 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
         version=version,
         game_context=game_context,
     )
+    result_v3 = lookup_batter_score_v3(
+        row["player"],
+        version=version,
+        game_context=game_context,
+    )
     h2h_pa, h2h_hits, h2h_ab = lookup_h2h_board_stats(
         row["player"],
         version=version,
@@ -339,6 +346,10 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
         "batter_score_v2_display": format_batter_score_display(
             result_v2.batter_score if result_v2 else None,
             (result_v2.partial_label if result_v2 else "") or "",
+        ),
+        "batter_score_v3_display": format_batter_score_display(
+            result_v3.batter_score if result_v3 else None,
+            (result_v3.partial_label if result_v3 else "") or "",
         ),
         "batter_score_label": row.get("batter_score_label") or "",
         "_game": row.get("game") or "",
@@ -499,6 +510,10 @@ def _batter_score_table_column_config():
         "batter_score_v2_display": st.column_config.TextColumn(
             "Batter score v2",
             help=GLOSSARY["batter_score_v2"],
+        ),
+        "batter_score_v3_display": st.column_config.TextColumn(
+            "Batter score v3",
+            help=GLOSSARY["batter_score_v3"],
         ),
     }
 

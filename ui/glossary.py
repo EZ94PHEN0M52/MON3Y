@@ -264,6 +264,15 @@ GLOSSARY = {
         "not ERA L5. Active when the opposing SP and detailed arsenal are "
         "available; otherwise partial renormalization applies."
     ),
+    "batter_score_v3": (
+        "Batter Score v3 uses **25% / 25% / 35% / 15%** weights. "
+        "**Expected quality (25%)** — blended xwOBA (20% season, 50% L5, "
+        "30% L10; Savant PA rules). **Production index (25%)** — blended "
+        "wRC+ (35% season, 65% L30; pooled PAs). **Matchup (35%)** and "
+        "**pitcher form (15%)** match v2 (Savant pitch types + FIP L5). "
+        "Falls back to H+TB+BB season/recent when Statcast quality windows "
+        "are unavailable (**counting fallback** label)."
+    ),
     "batter_score_season_baseline": (
         "Full-season per-game average of hits + total bases + walks (H+TB+BB), "
         "scaled to a 0–100 index (6.0 raw points = 100)."

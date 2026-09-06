@@ -36,16 +36,21 @@ from batter_score import (
     BatterScoreResult,
     GameLine,
     MAX_GRADE_POINTS,
+    MIN_GAMES_STATCAST_QUALITY,
     PHASE_A_GATES,
     PHASE_B_GATES,
     PHASE_D_GATES,
     USE_TEAM_PITCHING_PROXY,
     WEIGHTS_V1,
     WEIGHTS_V2,
+    WEIGHTS_V3,
     Weights,
     compute_batter_score_partial,
     compute_batter_score_phase_b,
     compute_batter_score_phase_d,
+    compute_batter_score_v3_partial,
+    compute_batter_score_v3_phase_b,
+    compute_batter_score_v3_phase_d,
     grade_min_threshold,
 )
 from build_features import EXTRA_BASES, HITS
@@ -804,6 +809,115 @@ def _score_batter_inputs_v2(
         return None
 
 
+def _lookup_statcast_quality_windows_for_rows(
+    batter_id: int,
+    player_rows: pd.DataFrame,
+    cache_key: tuple,
+) -> dict[str, Optional[float]]:
+    """xwOBA / wRC+ windows for v3, aligned to feature game dates."""
+    from hitters_life_data import (
+        _cached_batter_game_woba_xwoba,
+        _league_wrc_constants,
+        _woba_rate_from_games,
+        _wrc_plus_from_games,
+    )
+
+    empty = {
+        "season_xwoba": None,
+        "l5_xwoba": None,
+        "l10_xwoba": None,
+        "season_wrc_plus": None,
+        "l30_wrc_plus": None,
+    }
+    if player_rows is None or player_rows.empty:
+        return empty
+
+    games = _cached_batter_game_woba_xwoba(int(batter_id), cache_key)
+    if not games:
+        return empty
+
+    allowed = {
+        str(value)[:10]
+        for value in player_rows["game_date"].tolist()
+    }
+    aligned = tuple(game for game in games if game[0] in allowed)
+    if len(aligned) < MIN_GAMES_STATCAST_QUALITY:
+        return empty
+
+    constants = _league_wrc_constants(cache_key)
+    return {
+        "season_xwoba": _woba_rate_from_games(aligned, use_xwoba=True),
+        "l5_xwoba": _woba_rate_from_games(aligned, window=5, use_xwoba=True),
+        "l10_xwoba": _woba_rate_from_games(
+            aligned,
+            window=10,
+            use_xwoba=True,
+        ),
+        "season_wrc_plus": _wrc_plus_from_games(aligned, constants),
+        "l30_wrc_plus": _wrc_plus_from_games(
+            aligned,
+            constants,
+            window=30,
+        ),
+    }
+
+
+def _score_batter_inputs_v3(
+    batter: BatterInputs,
+    *,
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    """Batter Score v3: xwOBA + wRC+ form, v2 matchup + FIP pitcher form."""
+    sp_named = bool(batter.opposing_sp_name and game_context is not None)
+    sp_ready = sp_named and batter.opponent_pitcher_fip_l5 is not None
+    matchup_ready_v2 = (
+        sp_ready
+        and arsenal_ready(batter.opponent_pitcher_arsenal_v2)
+    )
+
+    try:
+        if matchup_ready_v2:
+            batter_v3 = replace(
+                batter,
+                opponent_pitcher_arsenal=batter.opponent_pitcher_arsenal_v2,
+            )
+            return compute_batter_score_v3_phase_d(
+                batter_v3,
+                gates=PHASE_D_GATES,
+                weights=WEIGHTS_V3,
+            )
+
+        if sp_ready:
+            return compute_batter_score_v3_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                weights=WEIGHTS_V3,
+            )
+
+        if (
+            USE_TEAM_PITCHING_PROXY
+            and batter.team_opp_earned_runs_proxy is not None
+            and game_context is not None
+            and not sp_named
+        ):
+            return compute_batter_score_v3_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                sp_tbd=True,
+                team_proxy=True,
+                weights=WEIGHTS_V3,
+            )
+
+        return compute_batter_score_v3_partial(
+            batter,
+            gates=PHASE_A_GATES,
+            weights=WEIGHTS_V3,
+            sp_tbd=game_context is not None and not sp_named,
+        )
+    except ValueError:
+        return None
+
+
 def _normalize_game_date(value) -> str:
     return str(pd.to_datetime(value).strftime("%Y-%m-%d"))
 
@@ -903,6 +1017,12 @@ def build_batter_inputs_from_rows(
         elif USE_TEAM_PITCHING_PROXY:
             team_proxy = _team_opp_earned_runs_proxy(player_rows)
 
+    statcast_windows = _lookup_statcast_quality_windows_for_rows(
+        batter_id,
+        player_rows,
+        _merged_statcast_cache_key(),
+    ) if batter_id is not None else {}
+
     return BatterInputs(
         name=display_name or "Unknown",
         season_avg_raw_points=season_avg,
@@ -917,6 +1037,11 @@ def build_batter_inputs_from_rows(
         h2h_hits=h2h_hits,
         h2h_ab=h2h_ab,
         team_opp_earned_runs_proxy=team_proxy,
+        season_xwoba=statcast_windows.get("season_xwoba"),
+        l5_xwoba=statcast_windows.get("l5_xwoba"),
+        l10_xwoba=statcast_windows.get("l10_xwoba"),
+        season_wrc_plus=statcast_windows.get("season_wrc_plus"),
+        l30_wrc_plus=statcast_windows.get("l30_wrc_plus"),
     )
 
 
@@ -1118,6 +1243,25 @@ def score_batter_v2(
     return _score_batter_inputs_v2(batter, game_context=game_context)
 
 
+def score_batter_v3(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    """
+    Batter Score v3: xwOBA + wRC+ form, Savant pitch-type matchup, FIP L5.
+    """
+    batter = build_batter_inputs(
+        player_name,
+        version=version,
+        game_context=game_context,
+    )
+    if batter is None:
+        return None
+
+    return _score_batter_inputs_v3(batter, game_context=game_context)
+
+
 def _score_cache_key(
     player_name: str,
     game_context: Optional[dict],
@@ -1247,6 +1391,48 @@ def lookup_batter_score_v2(
     cache_key = _score_cache_key(player_name, game_context) + "|v2"
 
     return _cached_score_v2(
+        cache_key,
+        player_name,
+        version,
+        context_json,
+    )
+
+
+@lru_cache(maxsize=256)
+def _cached_score_v3(
+    cache_key: str,
+    player_name: str,
+    version: str,
+    game_context_json: Optional[str],
+) -> Optional[BatterScoreResult]:
+    game_context = None
+    if game_context_json:
+        import json
+
+        game_context = json.loads(game_context_json)
+
+    return score_batter_v3(
+        player_name,
+        version=version,
+        game_context=game_context,
+    )
+
+
+def lookup_batter_score_v3(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    import json
+
+    context_json = (
+        json.dumps(game_context, sort_keys=True)
+        if game_context
+        else None
+    )
+    cache_key = _score_cache_key(player_name, game_context) + "|v3"
+
+    return _cached_score_v3(
         cache_key,
         player_name,
         version,

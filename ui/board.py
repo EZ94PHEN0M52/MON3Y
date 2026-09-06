@@ -60,6 +60,15 @@ BOARD_TABLE_COLUMNS = [
     "steam_flag",
 ]
 
+# Hidden on first load; still available via Filters & columns.
+BOARD_DEFAULT_HIDDEN_COLUMNS = frozenset({
+    "bookmaker",
+    "calibrated_probability",
+    "devigged_market_prob",
+    "best_book",
+    "line_delta",
+})
+
 RANKING_TABLE_COLUMNS = [
     "player_link",
     "game_time",
@@ -427,6 +436,14 @@ def _available_table_columns(filtered, version="v2"):
     return columns, optional_stats
 
 
+def _default_visible_board_columns(table_columns):
+    return [
+        column
+        for column in table_columns
+        if column not in BOARD_DEFAULT_HIDDEN_COLUMNS
+    ]
+
+
 def _init_board_filter_state(key_prefix):
     if f"{key_prefix}_markets" not in st.session_state:
         st.session_state[f"{key_prefix}_markets"] = []
@@ -467,8 +484,16 @@ def _render_filter_popover(df, key_prefix, version="v2"):
     min_ev_key = f"{key_prefix}_min_ev"
 
     table_columns, optional_stats = _available_table_columns(df, version=version)
-    if visible_key not in st.session_state:
-        st.session_state[visible_key] = list(table_columns)
+    migrate_key = f"{key_prefix}_board_default_columns_v1"
+    if not st.session_state.get(migrate_key):
+        st.session_state[visible_key] = _default_visible_board_columns(
+            table_columns,
+        )
+        st.session_state[migrate_key] = True
+    elif visible_key not in st.session_state:
+        st.session_state[visible_key] = _default_visible_board_columns(
+            table_columns,
+        )
 
     popover_filters = 0
     if st.session_state.get(f"{key_prefix}_min_edge", DEFAULT_MIN_EDGE) > DEFAULT_MIN_EDGE:

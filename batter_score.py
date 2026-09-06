@@ -78,6 +78,21 @@ WEIGHTS_V2 = Weights(
     pitcher_form=0.15,
 )
 
+# v3: expected quality (xwOBA) + production (wRC+) replace H+TB+BB season/recent.
+WEIGHTS_V3 = Weights(
+    season_baseline=0.25,
+    recent_form=0.25,
+    matchup_grade=0.35,
+    pitcher_form=0.15,
+)
+
+XWOBA_BLEND_SEASON = 0.20
+XWOBA_BLEND_L5 = 0.50
+XWOBA_BLEND_L10 = 0.30
+WRC_BLEND_SEASON = 0.35
+WRC_BLEND_L30 = 0.65
+MIN_GAMES_STATCAST_QUALITY = 10
+
 
 @dataclass
 class ComponentGates:
@@ -305,6 +320,12 @@ class BatterInputs:
     h2h_manual_override: bool = False
     team_opp_earned_runs_proxy: Optional[float] = None
     max_raw_points_for_100: float = 6.0   # scaling benchmark for the 0-100 index
+    # Batter Score v3 Statcast quality inputs (optional; v1/v2 ignore).
+    season_xwoba: Optional[float] = None
+    l5_xwoba: Optional[float] = None
+    l10_xwoba: Optional[float] = None
+    season_wrc_plus: Optional[float] = None
+    l30_wrc_plus: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -735,6 +756,267 @@ def _compute_with_gates(
         h2h_ab=batter.h2h_ab,
         sp_tbd=sp_tbd,
         team_proxy_used=team_proxy,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Batter Score v3 (Statcast xwOBA + wRC+; v1/v2 paths unchanged above)
+# ---------------------------------------------------------------------------
+
+
+def statcast_quality_ready(batter: BatterInputs) -> bool:
+    """True when all v3 xwOBA / wRC+ windows are available."""
+    values = (
+        batter.season_xwoba,
+        batter.l5_xwoba,
+        batter.l10_xwoba,
+        batter.season_wrc_plus,
+        batter.l30_wrc_plus,
+    )
+    return all(value is not None for value in values)
+
+
+def xwoba_to_index(xwoba: float) -> float:
+    _, points = grade_min_threshold(float(xwoba), WOBA_THRESHOLDS)
+    return points / MAX_GRADE_POINTS * 100
+
+
+def wrc_plus_to_index(wrc_plus: float) -> float:
+    return max(0.0, min(100.0, (float(wrc_plus) - 50.0) / 100.0 * 100.0))
+
+
+def expected_quality_index(batter: BatterInputs) -> float:
+    """Blended xwOBA (Szn / L5 / L10) mapped to a 0–100 index."""
+    blended = (
+        XWOBA_BLEND_SEASON * float(batter.season_xwoba)
+        + XWOBA_BLEND_L5 * float(batter.l5_xwoba)
+        + XWOBA_BLEND_L10 * float(batter.l10_xwoba)
+    )
+    return xwoba_to_index(blended)
+
+
+def production_index(batter: BatterInputs) -> float:
+    """Blended wRC+ (Szn / L30) mapped to a 0–100 index (100 wRC+ = 50)."""
+    blended = (
+        WRC_BLEND_SEASON * float(batter.season_wrc_plus)
+        + WRC_BLEND_L30 * float(batter.l30_wrc_plus)
+    )
+    return wrc_plus_to_index(blended)
+
+
+def partial_score_label_v3(
+    gates: ComponentGates,
+    *,
+    sp_tbd: bool = False,
+    team_proxy: bool = False,
+    counting_fallback: bool = False,
+) -> Optional[str]:
+    label = partial_score_label(
+        gates,
+        sp_tbd=sp_tbd,
+        team_proxy=team_proxy,
+    )
+    if counting_fallback:
+        suffix = " · counting fallback"
+        if label:
+            return f"{label}{suffix}"
+        return "Partial · counting fallback"
+    return label
+
+
+def _compute_with_gates_v3(
+    batter: BatterInputs,
+    weights: Weights,
+    rf_weights: RecentFormWeights,
+    m_weights: MatchupWeights,
+    gates: ComponentGates,
+    *,
+    sp_tbd: bool = False,
+    team_proxy: bool = False,
+) -> BatterScoreResult:
+    gate_map = gates.as_dict()
+    active_weight_map = renormalize_weights(weights, gates)
+    component_values = {}
+    gated_off = []
+    counting_fallback = not statcast_quality_ready(batter)
+
+    if gate_map["season_baseline"]:
+        if counting_fallback:
+            component_values["season_baseline"] = season_baseline_index(
+                batter
+            )
+        else:
+            component_values["season_baseline"] = expected_quality_index(
+                batter
+            )
+    else:
+        gated_off.append("season_baseline")
+
+    if gate_map["recent_form"]:
+        if counting_fallback:
+            component_values["recent_form"] = recent_form_index(
+                batter,
+                rf_weights,
+            )
+        else:
+            component_values["recent_form"] = production_index(batter)
+    else:
+        gated_off.append("recent_form")
+
+    matchup_grade = None
+    if gate_map["matchup_grade"]:
+        component_values["matchup_grade"] = matchup_grade_index(
+            batter,
+            m_weights,
+        )
+        matchup_grade = component_values["matchup_grade"]
+    else:
+        gated_off.append("matchup_grade")
+
+    pitcher_form = None
+    if gate_map["pitcher_form"]:
+        component_values["pitcher_form"] = pitcher_form_index(
+            batter,
+            use_team_proxy=team_proxy,
+            use_fip=True,
+        )
+        pitcher_form = component_values["pitcher_form"]
+    else:
+        gated_off.append("pitcher_form")
+
+    score = sum(
+        active_weight_map[key] * component_values[key]
+        for key in component_values
+    )
+
+    is_partial = len(gated_off) > 0 or counting_fallback
+    label = partial_score_label_v3(
+        gates,
+        sp_tbd=sp_tbd,
+        team_proxy=team_proxy,
+        counting_fallback=counting_fallback,
+    )
+    if not is_partial and label is None:
+        label = "Full"
+
+    return BatterScoreResult(
+        batter_name=batter.name,
+        season_baseline=component_values.get("season_baseline", 0.0),
+        recent_form=component_values.get("recent_form", 0.0),
+        matchup_grade=matchup_grade,
+        pitcher_form=pitcher_form,
+        batter_score=score,
+        is_partial=is_partial,
+        partial_label=label,
+        active_weights=active_weight_map,
+        gated_components=gated_off,
+        opposing_sp_name=batter.opposing_sp_name,
+        opposing_sp_era_l5=batter.opponent_pitcher_era_l5,
+        opposing_sp_fip_l5=batter.opponent_pitcher_fip_l5,
+        h2h_pa=batter.h2h_pa,
+        h2h_avg_raw_points=batter.h2h_avg_raw_points,
+        h2h_hits=batter.h2h_hits,
+        h2h_ab=batter.h2h_ab,
+        sp_tbd=sp_tbd,
+        team_proxy_used=team_proxy,
+    )
+
+
+def compute_batter_score_v3(
+    batter: BatterInputs,
+    weights: Weights = None,
+    rf_weights: RecentFormWeights = None,
+    m_weights: MatchupWeights = None,
+    gates: ComponentGates = None,
+    *,
+    sp_tbd: bool = False,
+    team_proxy: bool = False,
+) -> BatterScoreResult:
+    weights = weights or WEIGHTS_V3
+    rf_weights = rf_weights or RecentFormWeights()
+    m_weights = m_weights or MatchupWeights()
+    gates = gates or PHASE_D_GATES
+    weights.validate()
+    rf_weights.validate()
+    m_weights.validate()
+
+    return _compute_with_gates_v3(
+        batter,
+        weights,
+        rf_weights,
+        m_weights,
+        gates,
+        sp_tbd=sp_tbd,
+        team_proxy=team_proxy,
+    )
+
+
+def compute_batter_score_v3_partial(
+    batter: BatterInputs,
+    weights: Weights = None,
+    rf_weights: RecentFormWeights = None,
+    gates: ComponentGates = None,
+    *,
+    sp_tbd: bool = False,
+) -> BatterScoreResult:
+    gates = gates or PHASE_A_GATES
+    return compute_batter_score_v3(
+        batter,
+        weights=weights,
+        rf_weights=rf_weights,
+        gates=gates,
+        sp_tbd=sp_tbd,
+    )
+
+
+def compute_batter_score_v3_phase_b(
+    batter: BatterInputs,
+    weights: Weights = None,
+    rf_weights: RecentFormWeights = None,
+    gates: ComponentGates = None,
+    *,
+    sp_tbd: bool = False,
+    team_proxy: bool = False,
+    proxy_weights: Weights = None,
+) -> BatterScoreResult:
+    gates = gates or PHASE_B_GATES
+    score_weights = weights or WEIGHTS_V3
+
+    if team_proxy:
+        score_weights = proxy_weights or Weights(
+            season_baseline=score_weights.season_baseline,
+            recent_form=score_weights.recent_form,
+            matchup_grade=score_weights.matchup_grade,
+            pitcher_form=TEAM_PITCHING_PROXY_WEIGHT,
+        )
+
+    return compute_batter_score_v3(
+        batter,
+        weights=score_weights,
+        rf_weights=rf_weights,
+        gates=gates,
+        sp_tbd=sp_tbd,
+        team_proxy=team_proxy,
+    )
+
+
+def compute_batter_score_v3_phase_d(
+    batter: BatterInputs,
+    weights: Weights = None,
+    rf_weights: RecentFormWeights = None,
+    m_weights: MatchupWeights = None,
+    gates: ComponentGates = None,
+    *,
+    sp_tbd: bool = False,
+) -> BatterScoreResult:
+    gates = gates or PHASE_D_GATES
+    return compute_batter_score_v3(
+        batter,
+        weights=weights,
+        rf_weights=rf_weights,
+        m_weights=m_weights,
+        gates=gates,
+        sp_tbd=sp_tbd,
     )
 
 

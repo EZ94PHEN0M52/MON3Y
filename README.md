@@ -7,7 +7,7 @@
 
 **Table of contents:** [Quick notes](#quick-notes) · [Quick start](#quick-start-for-beginners) · [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Official lineups (pre-game)](#official-rotowire-lineups-pre-game) · [Stuff strikeout model (v2)](#stuff-strikeout-model-v2) · [Pitcher outs learning](#pitcher-outs-learning-loop-track-1) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
 
-> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder, PP/Underdog fantasy boards, **Hitter's Life**). **Stuff K (v2)** (Statcast SwStr/chase/velocity strikeout column) needs a one-time **`./run_pitcher_strikeout_stuff.sh`** — then daily predict picks it up automatically. Close to first pitch, run **`./run_official_lineups.sh`** so the [Hitter's Life](#hitters-life-board) lineup filter uses Rotowire **Today's Lineup** (official) instead of default vs RHP/LHP. For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
+> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder, PP/Underdog fantasy boards, **Hitter's Life**). **Batter Score v3** (xwOBA + wRC+ form) sits beside v1/v2 on batter score boards — v1/v2 math unchanged. **Hitter's Life** batting board adds **xwOBA** and **wRC+** columns (Savant-aligned, merged Statcast). **Stuff K (v2)** needs a one-time **`./run_pitcher_strikeout_stuff.sh`** — then daily predict picks it up automatically. Close to first pitch, run **`./run_official_lineups.sh`** so the [Hitter's Life](#hitters-life-board) lineup filter uses Rotowire **Today's Lineup** (official) instead of default vs RHP/LHP. For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
 
 ---
 
@@ -66,7 +66,7 @@ The pipeline does four things:
 | **V1** | Rolling form only (simple baseline) |
 | **V2** | + opponent, handedness, park |
 | **V3** | + Phases 1–6 (historical odds, multi-book, calibration, Batter Score, Pick Builder) — frozen at git tag **`v3`** |
-| **Main** | Today’s active code in this folder — same models as V3 plus post-v3 upgrades (dual-head pitcher K/walks/outs, Track 1 K/walks/outs learning, **validated** Batter Score + **Batter Score v2** (Savant pitch-type matchup), **Stuff K (v2)** strikeout model (SwStr/chase/velocity), **Hitter's Life** batting board, **official Rotowire lineups** (`./run_official_lineups.sh`), **Batter Score Pick Builder**, PrizePicks/Underdog fantasy lines on batter score boards, Rotowire lineup filter, Top Over/Under **Game & time** + L5/L10 %, player stat **H2H** filter, bat/throw **(L)/(R)** labels) |
+| **Main** | Today’s active code in this folder — same **LightGBM prop models** as V3 plus post-v3 upgrades: dual-head pitcher K/walks/outs, Track 1 K/walks/outs learning, **Stuff K (v2)**, **validated** Batter Score + **Batter Score v2** (Savant pitch-type matchup) + **Batter Score v3** (xwOBA / wRC+ form — display layer only; v1/v2 math unchanged), **Hitter's Life** batting board (**xwOBA**, **wRC+**, PP/UD fantasy lines), **official Rotowire lineups** (`./run_official_lineups.sh`), **Batter Score Pick Builder**, PrizePicks/Underdog fantasy on batter score boards, hot batters Statcast columns, main-board default column trim (Book / Calibrated / Devigged / Best Book / Line Δ hidden until toggled), Rotowire lineup filter, Top Over/Under **Game & time** + L5/L10 %, player stat **H2H** filter, bat/throw **(L)/(R)** labels |
 
 **Version compare** puts all four generations side-by-side on one table so you can see how **Over %** and **Under %** differ for the same player and market.
 
@@ -663,7 +663,7 @@ cp ../mlb-prop-model-v3/data/predictions/predictions_v2.csv \
 | **Git tag** | `v1` | `v2` | `v3` | — (branch **`main`** on [MON3Y](https://github.com/EZ94PHEN0M52/MON3Y)) |
 | **Player features** | Rolling L3/L5/L10/L20/season | + opponent, handedness, park | + game lines, stolen bases | Same as V3 |
 | **Odds pipeline** | Live props only | Live props only | Phases 1–6 (history, multi-book, movement, calibration) | Same as V3 |
-| **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 + fantasy-line batter score boards, **Hitter's Life** board, **official Rotowire lineups** script, **Batter Score v2**, **Batter Score Pick Builder**, ranking-table Game & time, conditional cell highlights, H2H stat history, Rotowire lineup filter |
+| **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 + fantasy-line batter score boards, **Hitter's Life** (**xwOBA**, **wRC+**, PP/UD fantasy), **Batter Score v2** + **v3**, **Stuff K (v2)**, hot batters Statcast columns, main-board default hidden columns, **official Rotowire lineups** script, **Batter Score Pick Builder**, ranking-table Game & time, conditional cell highlights, H2H stat history, Rotowire lineup filter |
 | **Models** | `models/*.pkl` | `models/v1/`, `models/v2/` | `models/v2/` + calibrators + dist | Same as V3 |
 | **Predictions** | `predictions.csv` | `predictions_v2.csv` | `predictions_v2.csv` + `_best.csv` | Same as V3 |
 | **Default CLI** | N/A | `--version v2` | `--version v2` | `--version v2` |
@@ -1104,10 +1104,10 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 **UI surfaces:**
 
 - **[Main board](#main-board-apppy--uiboardpy)** — sortable **Batter Score** column with labels **Full** / **Partial** / **Partial · SP TBD** / **Form only** (glossary tooltip); player names show **(L)/(R)** bat/throw hand when known
-- **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter). Columns: Player, **Game & time**, Opposing SP **(L)/(R)**, Vs pitcher, **PP fantasy**, **UD fantasy**, **L5 / L10 %** (vs PP line), **Batter score**, **Batter score v2**. **Conditional highlights:** orange **UD fantasy** when Underdog line &lt; PrizePicks; sky blue when PP = UD; light green **Vs pitcher** when H2H AVG &gt; .300; yellow/green **L5 / L10 %** when L5 ≥ 80% with L10 below/above 80%; red row outline when UD lower + L5/L10 green
-- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** (Hitter's Life) — **all** slate batters with Top 10 PP/UD/L5-L10/Vs pitcher columns and highlights, plus **Batting average** (Szn / L5 / L10) and **TB per game (L5)** with the same color rules as the [Batting average board](#hitters-life-board); **Game** selectbox above the table filters to one matchup (no **Game & time** column); **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
-- **[Main board → Hot batters — batter score](#main-board-apppy--uiboardpy)** — top **20** Batter Scores among hitters in the top **15** L5 batting averages **and** a Hitter's Life batting-AVG highlight (green / orange / yellow); includes **Batting average**, **TB per game (L5)**, and PP/UD/L5-L10/Vs pitcher columns with independent color rules; tie-break favors blue TB soarer then AVG color ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
-- **[Hitter's Life](#hitters-life-board)** (`?view=hitters_life`) — batting-context board: Vs SP (name + H2H), **Arsenal wOBA**, season/L5/L10 AVG, pitch-type wOBA selector, **SP arsenal** (Savant pitch names), TB game log; Rotowire lineup filter (**Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has run, else default vs SP hand)
+- **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter). Columns: Player, **Game & time**, Opposing SP **(L)/(R)**, Vs pitcher, **PP fantasy**, **UD fantasy**, **L5 / L10 %** (vs PP line), **Batter score**, **Batter score v2**, **Batter score v3**. **Conditional highlights:** orange **UD fantasy** when Underdog line &lt; PrizePicks; sky blue when PP = UD; light green **Vs pitcher** when H2H AVG &gt; .300; yellow/green **L5 / L10 %** when L5 ≥ 80% with L10 below/above 80%; red row outline when UD lower + L5/L10 green
+- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** (Hitter's Life) — **all** slate batters with Top 10 PP/UD/L5-L10/Vs pitcher columns and highlights, plus **Arsenal wOBA**, **Batting average** (Szn / L5 / L10), **TB per game (L5)**, and **Batter score v3**; **Game** selectbox above the table filters to one matchup (no **Game & time** column); **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
+- **[Main board → Hot batters — batter score](#main-board-apppy--uiboardpy)** — top **20** Batter Scores among hitters in the top **15** L5 batting averages **and** a Hitter's Life batting-AVG highlight (green / orange / yellow); includes **Arsenal wOBA**, **xwOBA**, **wRC+**, **Batting average**, **TB per game (L5)**, PP/UD/L5-L10/Vs pitcher, and **Batter score v3** (no **Game & time** column); tie-break favors blue TB soarer then AVG color ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
+- **[Hitter's Life](#hitters-life-board)** (`?view=hitters_life`) — batting-context board: Vs SP (name + H2H), **Arsenal wOBA**, **Batting average**, **xwOBA** (L5 · L10), **wRC+** (L30 · L10), pitch-type wOBA selector, **PP fantasy** / **UD fantasy**, **Batter score v3**, TB game log; Rotowire lineup filter (**Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has run, else default vs SP hand)
 - **[Player page](#player-pages-uplayerpy)** — component breakdown (season baseline, recent form, matchup, pitcher form), SP ERA L5 + H2H detail, H+TB+BB last-10 Altair chart; opposing SP name shows throw hand **(L)/(R)** when known
 - **[Stat history](#player-pages-uplayerpy)** — market dropdown (all batter/pitcher prop markets), **All / H2H** scope toggle (H2H = games vs today's slate opponent), **L5 / L10** window toggle, rolling averages, per-game Altair bar chart ([`ui/player_stats.py`](ui/player_stats.py))
 
@@ -1120,8 +1120,9 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 | **C** | SP identification pipeline | Enables Phase B/D when SP known | [`fetch_probables.py`](fetch_probables.py) → `daily_probables.parquet`; [Daily workflow](#daily-workflow-v2) step 4 |
 | **D** | Usage-weighted pitch-type matchup | **Full** (all four components) | [`pitch_matchup.py`](pitch_matchup.py) + [`compute_batter_score_phase_d()`](batter_score.py); `PHASE_D_GATES` |
 | **D v2** | Same composite; matchup uses **Savant pitch types** (4-Seam, Sinker, Sweeper, …) not five buckets | **Full** when detailed arsenal ready | [`build_opponent_pitcher_arsenal_detailed()`](pitch_matchup.py) + [`score_batter_v2()`](batter_score_data.py); shown as **Batter score v2** column on batter score boards |
+| **v3** | Same gates as v2; **expected quality** = blended **xwOBA** (20% Szn · 50% L5 · 30% L10); **production index** = blended **wRC+** (35% Szn · 65% L30); matchup + pitcher form unchanged from v2 | **Full** / **Partial** / **counting fallback** when Statcast quality windows missing | [`score_batter_v3()`](batter_score_data.py) + [`WEIGHTS_V3`](batter_score.py) (25/25/35/15); **Batter score v3** column on batter score boards — **v1 and v2 math untouched** |
 
-Scoring path in [`batter_score_data.py`](batter_score_data.py) `score_batter()`: Phase D when SP + Statcast arsenal ready → Phase B when SP + ERA L5 ready → Phase A otherwise. **`score_batter_v2()`** swaps in the detailed Savant arsenal for the matchup component only; season, form, and pitcher form unchanged. ERA L5 can resolve via **SP name** when `sp_id` is missing (see [NaN sp_id fix](#6-nan-sp_id--tbd-starter-ids-2026-08-19)); H2H and arsenal require a valid numeric ID.
+Scoring path in [`batter_score_data.py`](batter_score_data.py) `score_batter()`: Phase D when SP + Statcast arsenal ready → Phase B when SP + ERA L5 ready → Phase A otherwise. **`score_batter_v2()`** swaps in the detailed Savant arsenal for the matchup component only; season, form, and pitcher form unchanged. **`score_batter_v3()`** replaces season/recent H+TB+BB with xwOBA/wRC+ when Statcast windows exist; falls back to counting stats with a **counting fallback** label. ERA L5 can resolve via **SP name** when `sp_id` is missing (see [NaN sp_id fix](#6-nan-sp_id--tbd-starter-ids-2026-08-19)); H2H and arsenal require a valid numeric ID.
 
 ### 3. Component gating and weight renormalization
 
@@ -1245,7 +1246,7 @@ The active workspace is evolving into **Predictable** — the same MLB prop rese
 
 > **⚠️ Pre-flight — snapshot before v3.1 work**
 >
-> Before starting PickFinder v3.1 integration, create a new **snapshot subversion** from the current baseline (**v3.0 → v3.1 Predictable**). Tag or copy the repo as **`mlb-prop-model-v3.1`** (or similar) so v3.0 remains a clean rollback point while PickFinder fetch/join/UI work proceeds on `main`.
+> Before starting PickFinder v3.1 integration, create a new **snapshot subversion** from the current baseline (**v3.0 → v3.1 Predictable**). Tag or copy the repo as **`mlb-prop-model-v3.1`** (or similar) so v3.0 remains a clean rollback point while PickFinder fetch/join/UI work proceeds on `main`. As of **2026-09-03**, **`main`** already includes post-v3 board work (Stuff K v2, Batter Score v3, xwOBA/wRC+ columns) documented in [Changelog → 2026-09-03](#2026-09-03--batter-score-v3-xwoba--wrc-boards-main-board-column-defaults) — snapshot **after** that entry if you want v3.1 to include those features.
 
 ### Four-phase plan
 
@@ -1738,7 +1739,7 @@ Session favorites slip (Pickfinder-style, **no export**). Picks live in `st.sess
 
 Dedicated batting-context page at **`?view=hitters_life`** (link **Hitter's Life** on the main board next to Top Over / Top Under). Code: [`ui/hitters_life_page.py`](ui/hitters_life_page.py), [`ui/hitters_life_board.py`](ui/hitters_life_board.py), [`hitters_life_data.py`](hitters_life_data.py).
 
-- **Columns:** Player, **Game & time**, **Vs pitcher** (SP name + H2H hits/AB or SP ERA L5), **Arsenal wOBA** (usage-weighted vs SP mix), **Batting average** (Szn / L5 / L10), **wOBA vs {pitch type}** (selectbox: Fastball, Slider, …), **SP arsenal** (Savant pitch names, usage order), **TB per game** (last 5 games, space-separated)
+- **Columns:** Player, **Game & time**, **Vs pitcher** (SP name + H2H hits/AB or SP ERA L5), **Arsenal wOBA** (usage-weighted vs SP mix), **Batting average** (Szn / L5 / L10), **xwOBA** (L5 · L10), **wRC+** (L30 · L10), **wOBA vs {pitch type}** (selectbox: Fastball, Slider, …), **PP fantasy** / **UD fantasy**, **Batter score v3**, **TB per game** (last 5 games, space-separated)
 - **Highlights:** light green when season AVG &gt; .300 or H2H AVG &gt; .300; light green TB log when every game is non-zero ([`ui/hitters_life_highlights.py`](ui/hitters_life_highlights.py))
 - **Game filter:** same pattern as batter score by game
 - **Lineup filter** (when one game selected): prefers Rotowire **Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has cached **OFFICIAL** rows; otherwise **default vs opposing SP hand** ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) → `data/processed/rotowire_lineups.parquet`); orders batters 1–9 per team
@@ -1752,16 +1753,16 @@ The board always shows **one row per (player, market)** — the book with the hi
 
 - **Sidebar:** V1 / V2 model version selector; **[Prop Pick Builder](#pick-builder-uipick_builderpy)** and **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** favorites slips
 - **Market type** (always visible): full-width multiselect at the top — limits prop categories (Hits, **Batter Walks** / **Pitcher Walks** as distinct labels via [`ui/market_filters.py`](ui/market_filters.py)); synced with Top Over / Under previews. Home runs and stolen bases are excluded from the UI (`EXCLUDED_UI_MARKETS`).
-- **Filters & columns** popover: minimum Edge / EV sliders and **Show columns** visibility
+- **Filters & columns** popover: minimum Edge / EV sliders and **Show columns** visibility — **Book**, **Calibrated %**, **Devigged %**, **Best Book**, and **Line Δ** are **hidden on first load** (still available via Show columns)
 - **Active filter chips:** when any filter is on, a summary row shows **Active filters:** with each constraint as a chip and a **Clear all filters** button
 - **Filter by column** expander: labeled filters in a 3-column grid for every table column except Market — player text search, game/book multiselect, side, line/odds ranges, min Over % / Under % / Model % / Market % / Devigged % / L5–L10 % / Edge / Consensus Edge / EV / Best EV, etc. Active filters show **subscript indices** (e.g. Line₂) matching the chip order
 - **Column header sort buttons:** click a header to sort (up to **3 columns** — first click descending, second click ascending, third click removes; subscript ₁₂₃ shows sort priority). **Clear sort** resets to EV descending. Headers also show filter subscripts when a column filter is active
 - **AND logic:** Market type, min Edge, min EV, and every column filter combine with **AND** — a row must pass all active filters
 - **Summary metrics:** Prop count, best edge, best EV, unique players (reflect Market / Edge / EV filters)
 - **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); columns include **Player** (link, **(L)/(R)** hand when known), **Game & time**, market, book, line, side, Over/Under %, **L5 / L10 %**, Edge; links to full lists, **[Hitter's Life](#hitters-life-board)**, and **[Version compare](#version-compare-v1--v2--v3--main)**
-- **Top 10 batter score** — highest Batter Score among batters on the slate (best row per player; respects Market type filter; independent of Edge / EV filters). See [Batter Score → UI surfaces](#batter-score) for PP/UD fantasy columns, **Batter score v2**, and conditional cell highlights
-- **Batter score by game** (Hitter's Life) — all slate batters with Top 10 fantasy/score columns plus **Batting average** and **TB per game (L5)** (Hitter's Life color rules); **Game** selectbox filters to one matchup; **Batter Score Pick Builder** add controls
-- **Hot batters — batter score** — top **20** batter scores among elite L5 AVG hitters with batting-board highlights; **Top props by market** table sits above it ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
+- **Top 10 batter score** — highest Batter Score among batters on the slate (best row per player; respects Market type filter; independent of Edge / EV filters). See [Batter Score → UI surfaces](#batter-score) for PP/UD fantasy columns, **Batter score v2/v3**, and conditional cell highlights
+- **Batter score by game** (Hitter's Life) — all slate batters with Top 10 fantasy/score columns plus **Arsenal wOBA**, **Batting average**, **TB per game (L5)**, and **Batter score v3** (Hitter's Life color rules); **Game** selectbox filters to one matchup; **Batter Score Pick Builder** add controls
+- **Hot batters — batter score** — top **20** batter scores among elite L5 AVG hitters with **Arsenal wOBA**, **xwOBA**, **wRC+**, and batting-board highlights; **Top props by market** table sits above it ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
 - **Columns:** Player (link, **(L)/(R)** when known), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), **Pred #** and **Dist Over %** on pitcher K/walks/outs (dual-head), **Stuff K (v2)** on pitcher strikeouts only (Statcast stuff model — separate from Model % / Edge), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
 - **L5 / L10 %:** Share of the player's last 5 / 10 completed games where the stat strictly exceeded the posted line (from feature parquets via [`ui/player_stats.py`](ui/player_stats.py))
 
@@ -2316,7 +2317,7 @@ Local git repo with annotated tags for frozen snapshots. Remote: **[EZ94PHEN0M52
 | **`v2`** | `mlb-prop-model-v2/` | `fec6236` | Pre–Phases 1–6 baseline |
 | **`v3`** | `mlb-prop-model-v3/` | `3de111a` | Phases 1–6 + Batter Score A–D + board filters + Pick Builder |
 
-Active development continues on **`main`** in `mlb-prop-model/`. Post-v3 work (dual-head K/walks/outs, Track 1 outs learning, validated Batter Score, board/fantasy-line UX) lands on **`main`** and is documented in [Changelog](#changelog) and [docs/ROADMAP.md](docs/ROADMAP.md).
+Active development continues on **`main`** in `mlb-prop-model/`. Post-v3 work (dual-head K/walks/outs, Track 1 outs learning, validated Batter Score, Stuff K v2, **Batter Score v3**, xwOBA/wRC+ boards, board/fantasy-line UX) lands on **`main`** and is documented in [Changelog](#changelog) and [docs/ROADMAP.md](docs/ROADMAP.md). The frozen **`v3`** tag remains the rollback point before these upgrades; **`v3.1`** (Predictable / PickFinder IP) is planned next — see [Predictable plan](#predictable--pickfinder-ip-integration-v31-plan).
 
 ```bash
 git remote -v
@@ -2637,6 +2638,35 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 ---
 
 ## Changelog
+
+### 2026-09-03 — Batter Score v3, xwOBA / wRC+ boards, main-board column defaults
+
+**Context:** Extend batter research with Savant-quality form metrics (xwOBA, wRC+) without changing Batter Score v1 or v2. Surface the same signals on Hitter's Life and hot batters; declutter the main prop table defaults.
+
+**Added — Batter Score v3** (v1/v2 paths untouched):
+- [`batter_score.py`](batter_score.py) — **`WEIGHTS_V3`** (25% / 25% / 35% / 15%): **expected quality** (blended xwOBA: 20% Szn · 50% L5 · 30% L10), **production index** (blended wRC+: 35% Szn · 65% L30, pooled PAs), **matchup** (Savant pitch types — same as v2), **pitcher form** (FIP L5 + H2H — same as v2)
+- [`batter_score_data.py`](batter_score_data.py) — `score_batter_v3()` / `lookup_batter_score_v3()`; Statcast windows aligned to feature game dates (no lookahead); **counting fallback** to H+TB+BB season/recent when Statcast quality windows are unavailable
+- New **Batter score v3** column on Top 10, Batter score by game, Hitter's Life batting board, and **Hot batters — batter score**
+- Glossary: [`ui/glossary.py`](ui/glossary.py) `batter_score_v3`
+- Tests: [`scripts/test_batter_score.py`](scripts/test_batter_score.py) (v3 index + composite + fallback)
+
+**Added — Hitter's Life Statcast columns:**
+- [`hitters_life_data.py`](hitters_life_data.py) — **xwOBA** (**L5 · L10**) and **wRC+** (**L30 · L10**; leading window first for column sort) from merged Statcast
+- [`ui/hitters_life_board.py`](ui/hitters_life_board.py) — column config after **Batting average**
+
+**Changed — main board UX:**
+- [`ui/board.py`](ui/board.py) — **Book**, **Calibrated %**, **Devigged %**, **Best Book**, and **Line Δ** hidden on first load (still available via **Filters & columns → Show columns**)
+- [`ui/main_bottom_boards.py`](ui/main_bottom_boards.py) — **Hot batters** adds **Arsenal wOBA**, **xwOBA**, and **wRC+** (same helpers as Hitter's Life); column order preserved via pre-style DataFrame subset (pandas `Styler` compatibility)
+
+**Also (same release window):**
+- [`ui/batter_score_board.py`](ui/batter_score_board.py) — **Batter score by game** adds **Arsenal wOBA** (vs opposing SP mix)
+- Statcast refresh / `--include-today` posting-lag bailouts documented under [2026-08-30](#2026-08-30--batter-score-by-game-columns-hot-batters-board-tb-log-colors)
+
+**Board impact:** Display-only for v3 and new Statcast columns. Main prop **Model %**, **Edge**, and **EV** unchanged. Batter Score **v1** and **v2** scores and weights unchanged.
+
+**Follow-up:** wRC+ display columns show **L30 · L10** (season/L60 removed); **L30** is listed first for sorting. xwOBA display shows **L5 · L10** only (season removed). Hot batters board drops **Game & time**. Batting average board drops **SP arsenal** and **Batter score v1**; adds **PP fantasy** and **UD fantasy** lines.
+
+---
 
 ### 2026-08-29 — Stuff strikeout model (v2) — Statcast SwStr/chase/velocity
 

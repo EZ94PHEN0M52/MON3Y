@@ -194,6 +194,247 @@ def format_batting_average_column(
     return " · ".join(parts)
 
 
+# Savant xwOBA: contact uses estimated_woba_using_speedangle; walks/HBP/K use
+# woba_value weights (same pitch-level fields as Baseball Savant CSV).
+_PA_XWOBA_ZERO = frozenset({"strikeout", "strikeout_double_play"})
+_PA_XWOBA_USE_WOBA_VALUE = frozenset(
+    {"walk", "intent_walk", "hit_by_pitch", "catcher_interf", "truncated_pa"}
+)
+
+# FanGraphs wOBA scale + lg R/PA by season (lgwOBA computed from local Statcast).
+_LEAGUE_WRC_FIXED: dict[int, tuple[float, float]] = {
+    2024: (1.243, 0.118),
+    2025: (1.247, 0.117),
+    2026: (1.247, 0.117),
+}
+
+
+def _pa_woba_xwoba_parts(
+    event,
+    woba_value,
+    woba_denom,
+    estimated_xwoba,
+) -> tuple[float, float, float] | None:
+    """Return (wOBA num, xwOBA num, denom) for one plate appearance."""
+    if event is None or (isinstance(event, float) and pd.isna(event)):
+        return None
+
+    event = str(event)
+    denom = pd.to_numeric(woba_denom, errors="coerce")
+    if pd.isna(denom) or float(denom) <= 0:
+        denom = 1.0
+    else:
+        denom = float(denom)
+
+    woba = pd.to_numeric(woba_value, errors="coerce")
+    w_num = float(woba) if pd.notna(woba) else 0.0
+
+    if event in _PA_XWOBA_ZERO:
+        x_num = 0.0
+    elif event in _PA_XWOBA_USE_WOBA_VALUE:
+        x_num = w_num
+    else:
+        est = pd.to_numeric(estimated_xwoba, errors="coerce")
+        if pd.notna(est):
+            x_num = float(est)
+        else:
+            x_num = w_num
+
+    return w_num * denom, x_num * denom, denom
+
+
+@lru_cache(maxsize=512)
+def _cached_batter_game_woba_xwoba(
+    batter_id: int,
+    cache_key: tuple,
+) -> tuple[tuple[str, float, float, float], ...]:
+    """Per-game (wOBA sum, xwOBA sum, wOBA denom) from merged Statcast."""
+    statcast = _load_merged_statcast(cache_key)
+    if statcast is None or statcast.empty:
+        return tuple()
+
+    rows = statcast[
+        statcast["batter"].astype(int).eq(int(batter_id))
+        & statcast["events"].notna()
+    ]
+    if rows.empty or "game_date" not in rows.columns:
+        return tuple()
+
+    games: list[tuple[str, float, float, float]] = []
+    for game_date, group in rows.groupby("game_date", sort=True):
+        w_sum = 0.0
+        x_sum = 0.0
+        d_sum = 0.0
+        for _, row in group.iterrows():
+            parts = _pa_woba_xwoba_parts(
+                row.get("events"),
+                row.get("woba_value"),
+                row.get("woba_denom"),
+                row.get("estimated_woba_using_speedangle"),
+            )
+            if parts is None:
+                continue
+            w_part, x_part, denom = parts
+            w_sum += w_part
+            x_sum += x_part
+            d_sum += denom
+
+        if d_sum > 0:
+            games.append((str(game_date)[:10], w_sum, x_sum, d_sum))
+
+    return tuple(games)
+
+
+def _woba_rate_from_games(
+    games: tuple[tuple[str, float, float, float], ...],
+    *,
+    window: int | None = None,
+    use_xwoba: bool = False,
+) -> Optional[float]:
+    if not games:
+        return None
+
+    subset = games[-window:] if window else games
+    if use_xwoba:
+        numerator = sum(item[2] for item in subset)
+    else:
+        numerator = sum(item[1] for item in subset)
+    denominator = sum(item[3] for item in subset)
+    if denominator <= 0:
+        return None
+    return numerator / denominator
+
+
+@lru_cache(maxsize=4)
+def _league_wrc_constants(
+    cache_key: tuple,
+) -> tuple[float, float, float]:
+    """Return (lgwOBA, wOBA scale, lg R/PA) for wRC+ (Savant/FanGraphs formula)."""
+    statcast = _load_merged_statcast(cache_key)
+    fallback_scale, fallback_r_pa = _LEAGUE_WRC_FIXED.get(2026, (1.247, 0.117))
+    if statcast is None or statcast.empty:
+        return 0.310, fallback_scale, fallback_r_pa
+
+    pa = statcast[statcast["events"].notna()]
+    if pa.empty:
+        return 0.310, fallback_scale, fallback_r_pa
+
+    denom = pd.to_numeric(pa["woba_denom"], errors="coerce").fillna(0)
+    woba_val = pd.to_numeric(pa["woba_value"], errors="coerce").fillna(0)
+    total_denom = float(denom.sum())
+    if total_denom <= 0:
+        lgwoba = 0.310
+    else:
+        lgwoba = float((woba_val * denom).sum() / total_denom)
+
+    years = pd.to_datetime(pa["game_date"], errors="coerce").dt.year.dropna()
+    season = int(years.max()) if not years.empty else 2026
+    scale, lg_r_pa = _LEAGUE_WRC_FIXED.get(season, (fallback_scale, fallback_r_pa))
+    return lgwoba, scale, lg_r_pa
+
+
+def _wrc_plus_from_woba(
+    woba: float | None,
+    lgwoba: float,
+    woba_scale: float,
+    lg_r_pa: float,
+) -> Optional[float]:
+    """wRC+ = 100 * (wRC/PA) / (lg R/PA) using FanGraphs/Savant definition."""
+    if woba is None or pd.isna(woba):
+        return None
+    if woba_scale <= 0 or lg_r_pa <= 0:
+        return None
+
+    wrc_per_pa = (float(woba) - lgwoba) / woba_scale + lg_r_pa
+    return 100.0 * wrc_per_pa / lg_r_pa
+
+
+def _wrc_plus_from_games(
+    games: tuple[tuple[str, float, float, float], ...],
+    constants: tuple[float, float, float],
+    *,
+    window: int | None = None,
+) -> Optional[float]:
+    woba = _woba_rate_from_games(games, window=window, use_xwoba=False)
+    return _wrc_plus_from_woba(woba, *constants)
+
+
+def _batter_game_woba_xwoba(
+    player_name: str,
+    version: str,
+) -> tuple[tuple[str, float, float, float], ...] | None:
+    player_rows = _batter_rows(player_name, version=version)
+    if player_rows is None or player_rows.empty:
+        return None
+
+    latest = player_rows.sort_values("game_date").iloc[-1]
+    batter_id = coerce_mlb_id(latest.get("batter"))
+    if batter_id is None:
+        return None
+
+    return _cached_batter_game_woba_xwoba(
+        batter_id,
+        _merged_statcast_cache_key(),
+    )
+
+
+def lookup_xwoba_windows(
+    player_name: str,
+    version: str = "v2",
+) -> tuple[Optional[float], Optional[float]]:
+    """L5 and L10 xwOBA from merged Statcast (Savant methodology)."""
+    games = _batter_game_woba_xwoba(player_name, version)
+    if not games:
+        return None, None
+
+    return (
+        _woba_rate_from_games(games, window=5, use_xwoba=True),
+        _woba_rate_from_games(games, window=10, use_xwoba=True),
+    )
+
+
+def lookup_wrc_plus_windows(
+    player_name: str,
+    version: str = "v2",
+) -> tuple[Optional[float], Optional[float]]:
+    """Last-30-game and last-10-game wRC+ (pooled PA per window)."""
+    games = _batter_game_woba_xwoba(player_name, version)
+    if not games:
+        return None, None
+
+    constants = _league_wrc_constants(_merged_statcast_cache_key())
+    return (
+        _wrc_plus_from_games(games, constants, window=30),
+        _wrc_plus_from_games(games, constants, window=10),
+    )
+
+
+def format_xwoba_column(player_name: str, version: str) -> str:
+    """L5 and L10 xwOBA (Statcast expected wOBA); L5 first for sorting."""
+    l5, l10 = lookup_xwoba_windows(player_name, version)
+    parts = [
+        f"L5 {format_pitch_woba(l5)}",
+        f"L10 {format_pitch_woba(l10)}",
+    ]
+    return " · ".join(parts)
+
+
+def _format_wrc_plus_value(value) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{round(float(value))}"
+
+
+def format_wrc_plus_column(player_name: str, version: str) -> str:
+    """L30 and L10 wRC+ (100 = league average); L30 first for sorting."""
+    l30, l10 = lookup_wrc_plus_windows(player_name, version)
+    parts = [
+        f"L30 {_format_wrc_plus_value(l30)}",
+        f"L10 {_format_wrc_plus_value(l10)}",
+    ]
+    return " · ".join(parts)
+
+
 def lookup_pitch_bucket_woba(
     player_name: str,
     pitch_bucket: str,
@@ -508,7 +749,7 @@ def build_hitters_life_row(
     *,
     pitch_bucket: str,
 ) -> dict:
-    from batter_score_data import lookup_batter_score, lookup_batter_score_v2
+    from batter_score_data import lookup_batter_score, lookup_batter_score_v2, lookup_batter_score_v3
     from ui.formatting import format_name_with_hand
 
     game_context = build_game_context(
@@ -523,6 +764,11 @@ def build_hitters_life_row(
         game_context=game_context,
     )
     result_v2 = lookup_batter_score_v2(
+        row["player"],
+        version=version,
+        game_context=game_context,
+    )
+    result_v3 = lookup_batter_score_v3(
         row["player"],
         version=version,
         game_context=game_context,
@@ -557,18 +803,17 @@ def build_hitters_life_row(
         version,
         game_context,
     )
-    arsenal_usage = lookup_sp_arsenal_usage(
-        row["player"],
-        version,
-        game_context,
-    )
 
     from ui.batter_score import format_batter_score_display
+    from ui.player_stats import (
+        format_prizepicks_fantasy_line,
+        format_underdog_fantasy_line,
+    )
 
-    batter_score = result.batter_score if result else None
-    batter_score_label = (result.partial_label if result else "") or ""
     batter_score_v2 = result_v2.batter_score if result_v2 else None
     batter_score_v2_label = (result_v2.partial_label if result_v2 else "") or ""
+    batter_score_v3 = result_v3.batter_score if result_v3 else None
+    batter_score_v3_label = (result_v3.partial_label if result_v3 else "") or ""
 
     return {
         "player": row["player"],
@@ -585,17 +830,25 @@ def build_hitters_life_row(
             row["player"],
             version,
         ),
-        "batter_score_v1_display": format_batter_score_display(
-            batter_score,
-            batter_score_label,
+        "xwoba": format_xwoba_column(
+            row["player"],
+            version,
         ),
+        "wrc_plus": format_wrc_plus_column(
+            row["player"],
+            version,
+        ),
+        "pp_fantasy_line": format_prizepicks_fantasy_line(row["player"]),
+        "ud_fantasy_line": format_underdog_fantasy_line(row["player"]),
         "batter_score_v2_display": format_batter_score_display(
             batter_score_v2,
             batter_score_v2_label,
         ),
-        "_batter_score": batter_score,
+        "batter_score_v3_display": format_batter_score_display(
+            batter_score_v3,
+            batter_score_v3_label,
+        ),
         "pitch_woba": format_pitch_woba(woba),
-        "sp_arsenal": format_sp_arsenal_column(arsenal_usage),
         "total_bases_log": format_total_bases_game_log(
             row["player"],
             version=version,

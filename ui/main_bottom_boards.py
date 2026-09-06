@@ -5,9 +5,14 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from batter_score_data import build_game_context
 from hitters_life_data import (
     format_batting_average_column,
+    format_pitch_woba,
     format_total_bases_game_log,
+    format_wrc_plus_column,
+    format_xwoba_column,
+    lookup_arsenal_weighted_woba,
     lookup_batting_average_windows,
 )
 from ui.batter_score_board import (
@@ -44,15 +49,18 @@ MARKET_TOP_PROPS_COLUMNS = [
 
 HOT_BATTER_SCORE_COLUMNS = [
     "player_link",
-    "game_time",
     "opposing_sp",
     "vs_pitcher",
+    "arsenal_woba",
     "batting_average",
+    "xwoba",
+    "wrc_plus",
     "pp_fantasy_line",
     "ud_fantasy_line",
     "l5_l10_pct",
     "batter_score_display",
     "batter_score_v2_display",
+    "batter_score_v3_display",
     "total_bases_log",
 ]
 
@@ -192,7 +200,18 @@ def build_hot_batter_score_df(
 
         built = _build_batter_score_row(row, version)
         tb_log = format_total_bases_game_log(player, version=version)
+        game_context = build_game_context(
+            game=row.get("game"),
+            commence_time=row.get("commence_time"),
+            home_team=row.get("home_team"),
+            away_team=row.get("away_team"),
+        )
+        built["arsenal_woba"] = format_pitch_woba(
+            lookup_arsenal_weighted_woba(player, version, game_context),
+        )
         built["batting_average"] = batting_average
+        built["xwoba"] = format_xwoba_column(player, version)
+        built["wrc_plus"] = format_wrc_plus_column(player, version)
         built["_batting_average"] = batting_average
         built["total_bases_log"] = tb_log
         built["_total_bases_log"] = tb_log
@@ -209,11 +228,33 @@ def build_hot_batter_score_df(
 
 def _hot_batter_score_column_config():
     config = _batter_score_table_column_config()
+    config["arsenal_woba"] = st.column_config.TextColumn(
+        "Arsenal wOBA",
+        help=(
+            "Usage-weighted career wOBA vs the opposing SP's pitch mix "
+            "(last 5 starts), by pitch bucket."
+        ),
+    )
     config["batting_average"] = st.column_config.TextColumn(
         "Batting average",
         help=(
             "Season and rolling AVG (Statcast). Green / orange / yellow "
             "highlights match the Hitter's Life batting board."
+        ),
+    )
+    config["xwoba"] = st.column_config.TextColumn(
+        "xwOBA",
+        help=(
+            "Expected wOBA (Statcast): last 5 and last 10 games. "
+            "L5 is listed first for sorting. Same Savant methodology as "
+            "the Hitter's Life board."
+        ),
+    )
+    config["wrc_plus"] = st.column_config.TextColumn(
+        "wRC+",
+        help=(
+            "Weighted runs created plus (100 = league average): last 30 "
+            "and last 10 games (pooled PAs). L30 is listed first for sorting."
         ),
     )
     config["total_bases_log"] = st.column_config.TextColumn(
@@ -225,12 +266,26 @@ def _hot_batter_score_column_config():
             "money, orange hot, yellow warm."
         ),
     )
+    config["batter_score_v3_display"] = st.column_config.TextColumn(
+        "Batter score v3",
+        help=GLOSSARY["batter_score_v3"],
+    )
     return config
 
 
 def style_hot_batter_score_board(full_df: pd.DataFrame):
     """Batter-score styling plus TB-log and batting-AVG colors when present."""
-    return style_batter_score_board(full_df)
+    display_cols = [
+        column
+        for column in HOT_BATTER_SCORE_COLUMNS
+        if column in full_df.columns
+    ]
+    meta_cols = [
+        column
+        for column in full_df.columns
+        if column.startswith("_") or column in {"player", "batter_score_label"}
+    ]
+    return style_batter_score_board(full_df[display_cols + meta_cols])
 
 
 def _market_top_props_column_config():
@@ -310,9 +365,11 @@ def render_hot_batter_score_board(
         "**yellow** (season > .300). Scores that are identical or within "
         "**0.2** are ordered by **blue TB soarer** first (TB-log board "
         "only), then batting-AVG color priority. Those color rules stay "
-        "separate between boards. "
+        "separate between boards. Includes **Arsenal wOBA**, **xwOBA**, "
+        "and **wRC+** from the Hitter's Life batting board. "
         "Respects the Market type filter only (not Edge / EV). "
-        f"{GLOSSARY['batter_score']} {GLOSSARY['batter_score_v2']}"
+        f"{GLOSSARY['batter_score']} {GLOSSARY['batter_score_v2']} "
+        f"{GLOSSARY['batter_score_v3']}"
     )
 
     if hot_df.empty:

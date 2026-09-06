@@ -16,6 +16,7 @@ from batter_score import (  # noqa: E402
     BatterInputs,
     ComponentGates,
     GameLine,
+    PitchTypeMatchup,
     Weights,
     compute_batter_score_partial,
     compute_batter_score_phase_b,
@@ -1267,6 +1268,77 @@ def test_batter_score_pick_card_highlights():
     assert "4/10 .400" in html
 
 
+def test_v3_statcast_index_helpers():
+    from batter_score import (
+        expected_quality_index,
+        production_index,
+        statcast_quality_ready,
+        wrc_plus_to_index,
+        xwoba_to_index,
+    )
+
+    assert abs(xwoba_to_index(0.320) - 50.0) < 1.0
+    assert abs(wrc_plus_to_index(100.0) - 50.0) < 1e-6
+    assert abs(wrc_plus_to_index(150.0) - 100.0) < 1e-6
+
+    batter = BatterInputs(
+        name="Test",
+        season_avg_raw_points=3.0,
+        game_log=_sample_games(),
+        season_xwoba=0.350,
+        l5_xwoba=0.380,
+        l10_xwoba=0.330,
+        season_wrc_plus=110.0,
+        l30_wrc_plus=120.0,
+    )
+    assert statcast_quality_ready(batter)
+    assert expected_quality_index(batter) > production_index(batter)
+
+
+def test_compute_batter_score_v3_full():
+    from batter_score import (
+        PHASE_D_GATES,
+        WEIGHTS_V3,
+        compute_batter_score_v3_phase_d,
+    )
+
+    batter = BatterInputs(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+        season_xwoba=0.350,
+        l5_xwoba=0.380,
+        l10_xwoba=0.330,
+        season_wrc_plus=110.0,
+        l30_wrc_plus=120.0,
+        opponent_pitcher_fip_l5=4.20,
+        opponent_pitcher_arsenal=[
+            PitchTypeMatchup("4-Seam Fastball", 0.60, 0.360, 0.260),
+            PitchTypeMatchup("Slider", 0.40, 0.320, 0.240),
+        ],
+    )
+    result = compute_batter_score_v3_phase_d(
+        batter,
+        gates=PHASE_D_GATES,
+        weights=WEIGHTS_V3,
+    )
+    assert result.partial_label == "Full"
+    assert 0 <= result.batter_score <= 100
+
+
+def test_compute_batter_score_v3_counting_fallback():
+    from batter_score import compute_batter_score_v3_partial
+
+    batter = BatterInputs(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+    )
+    result = compute_batter_score_v3_partial(batter)
+    assert result.partial_label is not None
+    assert "counting fallback" in result.partial_label
+
+
 if __name__ == "__main__":
     test_renormalize_phase_a_weights()
     test_renormalize_phase_b_weights()
@@ -1313,4 +1385,7 @@ if __name__ == "__main__":
     test_style_batter_score_board_highlights_combo_row()
     test_style_batter_score_board_highlights_avg_and_tb_columns()
     test_batter_score_pick_card_highlights()
+    test_v3_statcast_index_helpers()
+    test_compute_batter_score_v3_full()
+    test_compute_batter_score_v3_counting_fallback()
     print("All batter score tests passed.")
