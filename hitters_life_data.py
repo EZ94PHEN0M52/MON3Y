@@ -808,7 +808,12 @@ def build_hitters_life_row(
     from ui.player_stats import (
         format_prizepicks_fantasy_line,
         format_underdog_fantasy_line,
+        lookup_prizepicks_fantasy_line,
+        lookup_underdog_fantasy_line,
     )
+
+    pp_line = lookup_prizepicks_fantasy_line(row["player"])
+    ud_line = lookup_underdog_fantasy_line(row["player"])
 
     batter_score_v2 = result_v2.batter_score if result_v2 else None
     batter_score_v2_label = (result_v2.partial_label if result_v2 else "") or ""
@@ -840,6 +845,8 @@ def build_hitters_life_row(
         ),
         "pp_fantasy_line": format_prizepicks_fantasy_line(row["player"]),
         "ud_fantasy_line": format_underdog_fantasy_line(row["player"]),
+        "_pp_line": pp_line,
+        "_ud_line": ud_line,
         "batter_score_v2_display": format_batter_score_display(
             batter_score_v2,
             batter_score_v2_label,

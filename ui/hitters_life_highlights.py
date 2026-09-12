@@ -10,6 +10,7 @@ from ui.batter_score_highlights import (
     STYLE_L5_L10_YELLOW,
     STYLE_VS_PITCHER_AVG,
     VS_PITCHER_AVG_THRESHOLD,
+    fantasy_cell_styles,
 )
 
 L5_AVG_HOT_THRESHOLD = 0.299
@@ -295,7 +296,7 @@ def h2h_avg_style(h2h_avg) -> str:
 
 
 def style_hitters_life_board(full_df: pd.DataFrame):
-    """Apply H2H AVG, batting average, and TB log cell highlights."""
+    """Apply H2H AVG, PP/UD fantasy, batting average, and TB log highlights."""
     if full_df.empty:
         return full_df.drop(
             columns=[
@@ -316,11 +317,16 @@ def style_hitters_life_board(full_df: pd.DataFrame):
     ).reset_index(drop=True)
 
     meta_df = full_df.reset_index(drop=True)
+    has_fantasy_meta = (
+        "_pp_line" in meta_df.columns and "_ud_line" in meta_df.columns
+    )
 
     h2h_avg_styles = []
     batting_average_styles = []
     tb_log_styles = []
     player_link_styles = []
+    pp_fantasy_styles = []
+    ud_fantasy_styles = []
 
     for idx in range(len(meta_df)):
         row = meta_df.iloc[idx]
@@ -338,6 +344,14 @@ def style_hitters_life_board(full_df: pd.DataFrame):
             else ""
         )
 
+        if has_fantasy_meta:
+            pp_style, ud_style, _ = fantasy_cell_styles(
+                row.get("_pp_line"),
+                row.get("_ud_line"),
+            )
+            pp_fantasy_styles.append(pp_style)
+            ud_fantasy_styles.append(ud_style)
+
     def _apply_row_styles(row):
         idx = row.name
         styles = [""] * len(row)
@@ -354,6 +368,13 @@ def style_hitters_life_board(full_df: pd.DataFrame):
 
         if player_link_styles[idx] and "player_link" in columns:
             styles[columns.index("player_link")] = player_link_styles[idx]
+
+        if has_fantasy_meta:
+            if pp_fantasy_styles[idx] and "pp_fantasy_line" in columns:
+                styles[columns.index("pp_fantasy_line")] = pp_fantasy_styles[idx]
+
+            if ud_fantasy_styles[idx] and "ud_fantasy_line" in columns:
+                styles[columns.index("ud_fantasy_line")] = ud_fantasy_styles[idx]
 
         return styles
 

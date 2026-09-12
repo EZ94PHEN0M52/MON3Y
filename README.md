@@ -213,7 +213,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` and set `ODDS_API_KEY=your_key_here`. Never commit `.env` — it is gitignored.
+Edit `.env` and set `ODDS_API_KEY=your_key_here`. For **Sleeper Picks** props on `./run_daily.sh`, also set `APIFY_TOKEN` (free tier at [Apify](https://console.apify.com/account/integrations) — ~pennies per MLB slate). Never commit `.env` — it is gitignored.
 
 **5. (Optional) Download training-season data** — only if `models/v1/` or `models/v2/` are empty and you need to train from scratch. Skip if pre-trained `.pkl` files already exist under `models/`. See [Initial data (one time)](#initial-data-one-time) for full commands (~10–30 minutes for Statcast + features + train).
 
@@ -293,7 +293,7 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 **What it does (in order):**
 
 1. `scripts/ensure_features.py --fix` — validates or rebuilds V2 feature parquets for the current season through **yesterday** (~1–15 min if rebuild needed; seconds if parquets are fresh).
-2. `fetch_data.py --props` — downloads today’s player prop lines → `data/processed/current_props.parquet` + an intraday snapshot under `data/raw/odds/snapshots/`.
+2. `fetch_data.py --props` — downloads today’s player prop lines → `data/processed/current_props.parquet` + an intraday snapshot under `data/raw/odds/snapshots/`. Also refreshes PrizePicks/Underdog fantasy lines and **Sleeper Picks** (`sleeper_props.parquet` via Apify when `APIFY_TOKEN` is in `.env`).
 3. `fetch_data.py --game-lines` — game totals/spreads → `data/processed/current_game_lines.parquet`.
 4. `fetch_probables.py` — probable starting pitchers → `data/processed/daily_probables.parquet` (feeds Batter Score on the board).
 5. `predict.py --version v2` — scores every prop → `data/predictions/predictions_v2.csv` and `predictions_v2_best.csv` (~30 s–2 min).
@@ -304,7 +304,7 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 |------|---------|-----|
 | **Evening** (~8pm PT, props live) | `./run_daily.sh --streamlit` | Fresh props, game lines, and probables for **tomorrow’s slate**; scores the board. Do **not** use `--skip-props` or `--skip-probables` — you want new lines and SP names. Add **`--include-today`** after today’s games finish and Statcast has posted if you want **TB per game**, L5/L10, and rolling form through **today** on the board (see [run_daily.sh flags](#run_dailysh--pipeline-flags)). |
 | **Next morning** (Statcast posted) | `./run_daily.sh --skip-props --streamlit` | Refreshes rolling stats through **calendar yesterday** without overwriting last night’s pre-game lines. Use **`--include-today`** only if you still need same-day box scores from a prior evening. |
-| **Pre-game** (~1–2 hr before first pitch) | `./run_official_lineups.sh` | Pulls Rotowire **Today's Lineup** for slate teams → [Hitter's Life](#hitters-life-board) lineup filter uses official 1–9 order (see [Official lineups](#official-rotowire-lineups-pre-game)). Reload Streamlit after. |
+| **Pre-game** (~1–2 hr before first pitch) | `./run_official_lineups.sh` | Pulls Rotowire **Today's Lineup** for slate teams → [Hitter's Life](#hitters-life-board) lineup filter uses official 1–9 order (see [Official lineups](#official-rotowire-lineups-pre-game)). Reload Streamlit after. **Also runs automatically** at the end of `./run_daily.sh` (best-effort; may still be projected if lineups are not posted yet). |
 
 **What lines up correctly on the evening run:**
 
@@ -312,6 +312,7 @@ cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
 - **SP props** (`pitcher_strikeouts`, walks, hits allowed, outs) — scored when books post them.
 - **Probables** — fetched for every **Eastern slate date** in `current_props.parquet` (feeds Batter Score opposing-SP lookup).
 - **Fantasy lines** — PrizePicks (`prizepicks_fantasy_lines.parquet`) and Underdog (`underdog_fantasy_lines.parquet`) refresh on every successful `--props` pass (feeds [batter score boards](#batter-score)).
+- **Sleeper Picks** — `sleeper_props.parquet` on every successful `--props` pass when `APIFY_TOKEN` is set; standalone: `python fetch_data.py --sleeper-props` ([Sleeper Picks board](#sleeper-picks-board)).
 - **Over % / Edge / EV** — computed at predict time from each player’s latest feature row (main LightGBM classifiers).
 - **Stuff K (v2)** — on **Pitcher Strikeouts** rows only, if `models/v2/pitcher_strikeouts_stuff.pkl` exists; shows expected K and Poisson Over % from Statcast SwStr/chase/velocity (does **not** change Edge/EV). First-time setup: [`./run_pitcher_strikeout_stuff.sh`](#run_pitcher_strikeout_stuffsh--stuff-k-v2-pipeline).
 
@@ -329,6 +330,7 @@ data/processed/pitcher_features_v2_2026-03-25_YYYY-MM-DD.parquet
 data/processed/current_props.parquet
 data/processed/prizepicks_fantasy_lines.parquet
 data/processed/underdog_fantasy_lines.parquet
+data/processed/sleeper_props.parquet   # when APIFY_TOKEN set (Apify)
 data/processed/current_game_lines.parquet
 data/processed/daily_probables.parquet
 data/predictions/predictions_v2.csv
@@ -441,6 +443,8 @@ For implementation details (merge keys, dedupe, slot config), see [Version compa
 
 Five bash entry points wrap the Python pipeline. Run them from the project root (`./script.sh`, not bare `script.sh` on zsh). Each auto-activates `.venv`.
 
+**Flags for any script:** run `./script.sh --help`, `./script.sh -help`, or `./help.sh <name>` (e.g. `./help.sh fetch_data`). Index: `./help.sh`.
+
 **Typical season schedule:**
 
 ```text
@@ -450,7 +454,18 @@ Pre-game (official lineups)   →  ./run_official_lineups.sh   # then reload Str
 First-time / refresh Stuff K  →  ./run_pitcher_strikeout_stuff.sh   # then daily only
 Weekly / after backfill     →  ./run_evaluation.sh
 Optional (outs learning)    →  ./run_pitcher_outs_learning.sh
+Sleeper Picks only (Apify)  →  python fetch_data.py --sleeper-props
 ```
+
+**Sleeper Picks:** Mobile-only lines via Apify. Set `APIFY_TOKEN` in `.env` (see [Quick start → Add your API key](#quick-start-for-beginners)). Included automatically on every `./run_daily.sh` props fetch (step 2). To refresh **only** Sleeper → `data/processed/sleeper_props.parquet` without Odds API:
+
+```bash
+cd /Users/edosaona-enagbare/pfinder_v1/mlb-prop-model
+source .venv/bin/activate
+python fetch_data.py --sleeper-props
+```
+
+Board: **Sleeper Picks** link on the main page, or `?view=sleeper_picks`. See [Sleeper Picks board](#sleeper-picks-board).
 
 Full flag tables live in [Command reference](#command-reference). This section is the **order-of-operations cheat sheet**.
 
@@ -469,12 +484,13 @@ Full flag tables live in [Command reference](#command-reference). This section i
 | Step | What runs | Skipped by |
 |------|-----------|------------|
 | 1 | `ensure_features.py --fix` — season features through **yesterday** | Never |
-| 2 | `fetch_data.py --props` → `current_props.parquet`, `prizepicks_fantasy_lines.parquet`, `underdog_fantasy_lines.parquet` | `--skip-props` |
+| 2 | `fetch_data.py --props` → `current_props.parquet`, `prizepicks_fantasy_lines.parquet`, `underdog_fantasy_lines.parquet`, `sleeper_props.parquet` (when `APIFY_TOKEN` set) | `--skip-props` |
 | 3 | `fetch_data.py --game-lines` → `current_game_lines.parquet` | `--skip-game-lines` |
 | 4 | `fetch_data.py --probables` → `daily_probables.parquet` | `--skip-probables` |
-| 5 | `train.py` (2025 window) | Only `--train` |
-| 6 | `predict.py --version v2` → `predictions_v2.csv` | Never |
-| 7 | `streamlit run app.py` | Only with `--streamlit` |
+| 5 | `./run_official_lineups.sh` → Rotowire **Today's Lineup** in `rotowire_lineups.parquet` (best-effort) | `--skip-official-lineups` |
+| 6 | `train.py` (2025 window) | Only `--train` |
+| 7 | `predict.py --version v2` → `predictions_v2.csv` | Never |
+| 8 | `streamlit run app.py` | Only with `--streamlit` |
 
 | Flag | What it does | When to use |
 |------|--------------|-------------|
@@ -482,6 +498,7 @@ Full flag tables live in [Command reference](#command-reference). This section i
 | `--streamlit` | Opens board after predict | Normal daily UX |
 | `--skip-props` | Reuse cached props/lines from last fetch | **Morning** refresh; after games start (keeps pre-game lines) |
 | `--skip-probables` | Reuse cached SP list | Repeat run same slate; save MLB API calls |
+| `--skip-official-lineups` | Skip Rotowire official lineup fetch | Faster run; keep projected/default lineups |
 | `--skip-game-lines` | Reuse cached totals/spreads | Re-predict only |
 | `--train` | Retrain all V2 classifiers on 2025 window | First setup, schema bump, infrequent refresh — **not** daily |
 | `--port N` | Streamlit port (default 8501) | Port conflict |
@@ -1722,7 +1739,7 @@ All markets below are fetched from The Odds API (`odds_api.py` `PROP_MARKETS`), 
 
 ## Streamlit UI
 
-Launch with `streamlit run app.py` or [`./run_daily.sh --streamlit`](#daily-workflow-v2). Routing uses query params: `?player=Name` for player pages, `?view=top_over` / `?view=top_under` for full ranked lists, `?view=hitters_life` for the [Hitter's Life board](#hitters-life-board), `?view=compare` for version compare.
+Launch with `streamlit run app.py` or [`./run_daily.sh --streamlit`](#daily-workflow-v2). Routing uses query params: `?player=Name` for player pages, `?view=top_over` / `?view=top_under` for full ranked lists, `?view=hitters_life` for the [Hitter's Life board](#hitters-life-board), `?view=sleeper_picks` for [Sleeper Picks](#sleeper-picks-board), `?view=compare` for version compare.
 
 ### Pick Builder (`ui/pick_builder.py`)
 
@@ -1745,6 +1762,17 @@ Dedicated batting-context page at **`?view=hitters_life`** (link **Hitter's Life
 - **Lineup filter** (when one game selected): prefers Rotowire **Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has cached **OFFICIAL** rows; otherwise **default vs opposing SP hand** ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) → `data/processed/rotowire_lineups.parquet`); orders batters 1–9 per team
 - Respects **Market type** filter only (not Edge / EV)
 
+### Sleeper Picks board
+
+Dedicated Sleeper Picks page at **`?view=sleeper_picks`** (link **Sleeper Picks** on the main board). Code: [`ui/sleeper_picks_page.py`](ui/sleeper_picks_page.py), [`ui/sleeper_picks_board.py`](ui/sleeper_picks_board.py), [`fetch_sleeper_props.py`](fetch_sleeper_props.py).
+
+- **Source:** Apify actor `solidcode/sleeper-player-props-scraper` (`leagues: mlb`; falls back to `zen-studio/sleeper-player-props` if empty). Sleeper lines are mobile-only; Apify handles auth/scraping.
+- **Fetch:** end of every successful `fetch_data.py --props` when `APIFY_TOKEN` is in `.env`; standalone `python fetch_data.py --sleeper-props`
+- **Output:** `data/processed/sleeper_props.parquet`
+- **Columns:** Player, Game, Stat, Line, Over/Under multipliers, Over pick % (Sleeper user consensus), Team, start time
+- **Not merged** into the main model board or predictions CSV
+- **Prop analyzer (MVP):** below the flat board — matchup → lineup → player props with L5/L10 hit rates (`sleeper_analyzer/` package). L5/L10 uses **stat > line** (exact line = miss). Non-lineup players appear under **More props (not in lineup)**.
+
 ### Main board (`app.py` → `ui/board.py`)
 
 The board always shows **one row per (player, market)** — the book with the highest **EV** — via [`dedupe_best_prop()`](odds_aggregation.py) in [`apply_top_level_filters()`](ui/board.py). There is **no All books toggle** on the board. `predictions_v2.csv` still contains every book; dedupe happens at render time (and in `predictions_v2_best.csv` at write time).
@@ -1759,7 +1787,7 @@ The board always shows **one row per (player, market)** — the book with the hi
 - **Column header sort buttons:** click a header to sort (up to **3 columns** — first click descending, second click ascending, third click removes; subscript ₁₂₃ shows sort priority). **Clear sort** resets to EV descending. Headers also show filter subscripts when a column filter is active
 - **AND logic:** Market type, min Edge, min EV, and every column filter combine with **AND** — a row must pass all active filters
 - **Summary metrics:** Prop count, best edge, best EV, unique players (reflect Market / Edge / EV filters)
-- **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); columns include **Player** (link, **(L)/(R)** hand when known), **Game & time**, market, book, line, side, Over/Under %, **L5 / L10 %**, Edge; links to full lists, **[Hitter's Life](#hitters-life-board)**, and **[Version compare](#version-compare-v1--v2--v3--main)**
+- **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); columns include **Player** (link, **(L)/(R)** hand when known), **Game & time**, market, book, line, side, Over/Under %, **L5 / L10 %**, Edge; links to full lists, **[Hitter's Life](#hitters-life-board)**, **[Sleeper Picks](#sleeper-picks-board)**, and **[Version compare](#version-compare-v1--v2--v3--main)**
 - **Top 10 batter score** — highest Batter Score among batters on the slate (best row per player; respects Market type filter; independent of Edge / EV filters). See [Batter Score → UI surfaces](#batter-score) for PP/UD fantasy columns, **Batter score v2/v3**, and conditional cell highlights
 - **Batter score by game** (Hitter's Life) — all slate batters with Top 10 fantasy/score columns plus **Arsenal wOBA**, **Batting average**, **TB per game (L5)**, and **Batter score v3** (Hitter's Life color rules); **Game** selectbox filters to one matchup; **Batter Score Pick Builder** add controls
 - **Hot batters — batter score** — top **20** batter scores among elite L5 AVG hitters with **Arsenal wOBA**, **xwOBA**, **wRC+**, and batting-board highlights; **Top props by market** table sits above it ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))

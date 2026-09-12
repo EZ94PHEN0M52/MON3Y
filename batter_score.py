@@ -2,8 +2,8 @@
 Batter Score model
 ===================
 A composite 0-100 rating for a batter's upcoming game, blending:
-  1. Season baseline        (H + TB + BB per game)              - 20%
-  2. Recent form             L5/L10 blend of the same stat       - 30%
+  1. Season baseline        60% H+TB+BB + 40% Szn xwOBA/wRC+ (v1)
+  2. Recent form             60% L5/L10 counting + 40% L5 xwOBA/L10 wRC+ (v1)
   3. Matchup grade            wOBA-vs-pitch (35%) + AVG-vs-pitch (65%),
                                usage-weighted across the opposing
                                pitcher's arsenal                  - 35%
@@ -92,6 +92,12 @@ XWOBA_BLEND_L10 = 0.30
 WRC_BLEND_SEASON = 0.35
 WRC_BLEND_L30 = 0.65
 MIN_GAMES_STATCAST_QUALITY = 10
+
+# v1: 60% counting (H+TB+BB) + 40% Statcast (xwOBA + wRC+).
+V1_COUNTING_BLEND = 0.60
+V1_STATCAST_BLEND = 0.40
+V1_STATCAST_XWOBA_WEIGHT = 0.50
+V1_STATCAST_WRC_WEIGHT = 0.50
 
 
 @dataclass
@@ -320,11 +326,12 @@ class BatterInputs:
     h2h_manual_override: bool = False
     team_opp_earned_runs_proxy: Optional[float] = None
     max_raw_points_for_100: float = 6.0   # scaling benchmark for the 0-100 index
-    # Batter Score v3 Statcast quality inputs (optional; v1/v2 ignore).
+    # Statcast quality inputs (optional). v1 blends when present; v3 requires all.
     season_xwoba: Optional[float] = None
     l5_xwoba: Optional[float] = None
     l10_xwoba: Optional[float] = None
     season_wrc_plus: Optional[float] = None
+    l10_wrc_plus: Optional[float] = None
     l30_wrc_plus: Optional[float] = None
 
 
@@ -357,6 +364,72 @@ def recent_form_index(
         100.0,
         blended / batter.max_raw_points_for_100 * 100,
     )
+
+
+def xwoba_to_index(xwoba: float) -> float:
+    _, points = grade_min_threshold(float(xwoba), WOBA_THRESHOLDS)
+    return points / MAX_GRADE_POINTS * 100
+
+
+def wrc_plus_to_index(wrc_plus: float) -> float:
+    return max(0.0, min(100.0, (float(wrc_plus) - 50.0) / 100.0 * 100.0))
+
+
+def statcast_v1_season_ready(batter: BatterInputs) -> bool:
+    """True when season xwOBA and wRC+ are available for v1 blending."""
+    return (
+        batter.season_xwoba is not None
+        and batter.season_wrc_plus is not None
+    )
+
+
+def statcast_v1_recent_ready(batter: BatterInputs) -> bool:
+    """True when L5 xwOBA and L10 wRC+ are available for v1 blending."""
+    return (
+        batter.l5_xwoba is not None
+        and batter.l10_wrc_plus is not None
+    )
+
+
+def statcast_season_index_v1(batter: BatterInputs) -> float:
+    """Season Statcast index: 50/50 season xwOBA + season wRC+."""
+    xwoba_idx = xwoba_to_index(float(batter.season_xwoba))
+    wrc_idx = wrc_plus_to_index(float(batter.season_wrc_plus))
+    return (
+        V1_STATCAST_XWOBA_WEIGHT * xwoba_idx
+        + V1_STATCAST_WRC_WEIGHT * wrc_idx
+    )
+
+
+def statcast_recent_index_v1(batter: BatterInputs) -> float:
+    """Recent Statcast index: 50/50 L5 xwOBA + L10 wRC+."""
+    xwoba_idx = xwoba_to_index(float(batter.l5_xwoba))
+    wrc_idx = wrc_plus_to_index(float(batter.l10_wrc_plus))
+    return (
+        V1_STATCAST_XWOBA_WEIGHT * xwoba_idx
+        + V1_STATCAST_WRC_WEIGHT * wrc_idx
+    )
+
+
+def season_baseline_index_v1(batter: BatterInputs) -> float:
+    """60% counting season baseline + 40% season Statcast when available."""
+    counting = season_baseline_index(batter)
+    if not statcast_v1_season_ready(batter):
+        return counting
+    statcast = statcast_season_index_v1(batter)
+    return V1_COUNTING_BLEND * counting + V1_STATCAST_BLEND * statcast
+
+
+def recent_form_index_v1(
+    batter: BatterInputs,
+    rf_weights: RecentFormWeights,
+) -> float:
+    """60% counting L5/L10 form + 40% L5 xwOBA / L10 wRC+ when available."""
+    counting = recent_form_index(batter, rf_weights)
+    if not statcast_v1_recent_ready(batter):
+        return counting
+    statcast = statcast_recent_index_v1(batter)
+    return V1_COUNTING_BLEND * counting + V1_STATCAST_BLEND * statcast
 
 
 def matchup_grade_index(
@@ -554,6 +627,7 @@ def compute_batter_score(
     sp_tbd: bool = False,
     team_proxy: bool = False,
     pitcher_form_use_fip: bool = False,
+    statcast_blend_v1: bool = False,
 ) -> BatterScoreResult:
     weights = weights or Weights()
     rf_weights = rf_weights or RecentFormWeights()
@@ -577,6 +651,7 @@ def compute_batter_score(
         sp_tbd=sp_tbd,
         team_proxy=team_proxy,
         pitcher_form_use_fip=pitcher_form_use_fip,
+        statcast_blend_v1=statcast_blend_v1,
     )
 
 
@@ -588,6 +663,7 @@ def compute_batter_score_partial(
     *,
     sp_tbd: bool = False,
     pitcher_form_use_fip: bool = False,
+    statcast_blend_v1: bool = False,
 ) -> BatterScoreResult:
     """
     Phase A entry point: season baseline + recent form only.
@@ -603,6 +679,7 @@ def compute_batter_score_partial(
         gates=gates,
         sp_tbd=sp_tbd,
         pitcher_form_use_fip=pitcher_form_use_fip,
+        statcast_blend_v1=statcast_blend_v1,
     )
 
 
@@ -616,6 +693,7 @@ def compute_batter_score_phase_b(
     team_proxy: bool = False,
     proxy_weights: Weights = None,
     pitcher_form_use_fip: bool = False,
+    statcast_blend_v1: bool = False,
 ) -> BatterScoreResult:
     """
     Phase B entry point: season + form + pitcher form (ERA/FIP L5 + optional H2H).
@@ -641,6 +719,7 @@ def compute_batter_score_phase_b(
         sp_tbd=sp_tbd,
         team_proxy=team_proxy,
         pitcher_form_use_fip=pitcher_form_use_fip,
+        statcast_blend_v1=statcast_blend_v1,
     )
 
 
@@ -653,6 +732,7 @@ def compute_batter_score_phase_d(
     *,
     sp_tbd: bool = False,
     pitcher_form_use_fip: bool = False,
+    statcast_blend_v1: bool = False,
 ) -> BatterScoreResult:
     """
     Phase D entry point: full composite with usage-weighted pitch-type matchup.
@@ -667,6 +747,7 @@ def compute_batter_score_phase_d(
         gates=gates,
         sp_tbd=sp_tbd,
         pitcher_form_use_fip=pitcher_form_use_fip,
+        statcast_blend_v1=statcast_blend_v1,
     )
 
 
@@ -680,6 +761,7 @@ def _compute_with_gates(
     sp_tbd: bool = False,
     team_proxy: bool = False,
     pitcher_form_use_fip: bool = False,
+    statcast_blend_v1: bool = False,
 ) -> BatterScoreResult:
     gate_map = gates.as_dict()
     active_weight_map = renormalize_weights(weights, gates)
@@ -687,17 +769,28 @@ def _compute_with_gates(
     gated_off = []
 
     if gate_map["season_baseline"]:
-        component_values["season_baseline"] = season_baseline_index(
-            batter
-        )
+        if statcast_blend_v1:
+            component_values["season_baseline"] = season_baseline_index_v1(
+                batter
+            )
+        else:
+            component_values["season_baseline"] = season_baseline_index(
+                batter
+            )
     else:
         gated_off.append("season_baseline")
 
     if gate_map["recent_form"]:
-        component_values["recent_form"] = recent_form_index(
-            batter,
-            rf_weights,
-        )
+        if statcast_blend_v1:
+            component_values["recent_form"] = recent_form_index_v1(
+                batter,
+                rf_weights,
+            )
+        else:
+            component_values["recent_form"] = recent_form_index(
+                batter,
+                rf_weights,
+            )
     else:
         gated_off.append("recent_form")
 
@@ -774,15 +867,6 @@ def statcast_quality_ready(batter: BatterInputs) -> bool:
         batter.l30_wrc_plus,
     )
     return all(value is not None for value in values)
-
-
-def xwoba_to_index(xwoba: float) -> float:
-    _, points = grade_min_threshold(float(xwoba), WOBA_THRESHOLDS)
-    return points / MAX_GRADE_POINTS * 100
-
-
-def wrc_plus_to_index(wrc_plus: float) -> float:
-    return max(0.0, min(100.0, (float(wrc_plus) - 50.0) / 100.0 * 100.0))
 
 
 def expected_quality_index(batter: BatterInputs) -> float:

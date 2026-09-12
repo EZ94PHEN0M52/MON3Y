@@ -713,6 +713,7 @@ def _score_batter_inputs(
                 gates=PHASE_D_GATES,
                 weights=weights,
                 pitcher_form_use_fip=pitcher_form_use_fip,
+                statcast_blend_v1=True,
             )
 
         if sp_ready:
@@ -721,6 +722,7 @@ def _score_batter_inputs(
                 gates=PHASE_B_GATES,
                 weights=weights,
                 pitcher_form_use_fip=pitcher_form_use_fip,
+                statcast_blend_v1=True,
             )
 
         if (
@@ -736,6 +738,7 @@ def _score_batter_inputs(
                 team_proxy=True,
                 weights=weights,
                 pitcher_form_use_fip=pitcher_form_use_fip,
+                statcast_blend_v1=True,
             )
 
         return compute_batter_score_partial(
@@ -744,6 +747,7 @@ def _score_batter_inputs(
             weights=weights,
             sp_tbd=game_context is not None and not sp_named,
             pitcher_form_use_fip=pitcher_form_use_fip,
+            statcast_blend_v1=True,
         )
     except ValueError:
         return None
@@ -827,6 +831,7 @@ def _lookup_statcast_quality_windows_for_rows(
         "l5_xwoba": None,
         "l10_xwoba": None,
         "season_wrc_plus": None,
+        "l10_wrc_plus": None,
         "l30_wrc_plus": None,
     }
     if player_rows is None or player_rows.empty:
@@ -854,6 +859,11 @@ def _lookup_statcast_quality_windows_for_rows(
             use_xwoba=True,
         ),
         "season_wrc_plus": _wrc_plus_from_games(aligned, constants),
+        "l10_wrc_plus": _wrc_plus_from_games(
+            aligned,
+            constants,
+            window=10,
+        ),
         "l30_wrc_plus": _wrc_plus_from_games(
             aligned,
             constants,
@@ -1041,6 +1051,7 @@ def build_batter_inputs_from_rows(
         l5_xwoba=statcast_windows.get("l5_xwoba"),
         l10_xwoba=statcast_windows.get("l10_xwoba"),
         season_wrc_plus=statcast_windows.get("season_wrc_plus"),
+        l10_wrc_plus=statcast_windows.get("l10_wrc_plus"),
         l30_wrc_plus=statcast_windows.get("l30_wrc_plus"),
     )
 
@@ -1126,6 +1137,7 @@ def score_batter_as_of(
                 batter,
                 gates=PHASE_D_GATES,
                 weights=WEIGHTS_V1,
+                statcast_blend_v1=True,
             )
 
         if sp_ready:
@@ -1133,6 +1145,7 @@ def score_batter_as_of(
                 batter,
                 gates=PHASE_B_GATES,
                 weights=WEIGHTS_V1,
+                statcast_blend_v1=True,
             )
 
         if (
@@ -1147,6 +1160,7 @@ def score_batter_as_of(
                 sp_tbd=True,
                 team_proxy=True,
                 weights=WEIGHTS_V1,
+                statcast_blend_v1=True,
             )
 
         return compute_batter_score_partial(
@@ -1154,6 +1168,7 @@ def score_batter_as_of(
             gates=PHASE_A_GATES,
             weights=WEIGHTS_V1,
             sp_tbd=game_context is not None and not sp_named,
+            statcast_blend_v1=True,
         )
     except ValueError:
         return None

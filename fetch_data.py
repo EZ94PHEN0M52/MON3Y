@@ -1,5 +1,8 @@
 import argparse
 import sys
+
+from scripts.cli_help import normalize_help_argv
+import sys
 import time
 
 import pandas as pd
@@ -10,6 +13,7 @@ from pybaseball import (
 )
 
 from fetch_underdog_fantasy import fetch_and_save_underdog_fantasy_lines
+from fetch_sleeper_props import fetch_and_save_sleeper_props
 from odds_api import (
     GAME_MARKETS,
     OddsApiQuotaError,
@@ -249,6 +253,10 @@ def fetch_current_props():
         PROCESSED_DIR /
         "underdog_fantasy_lines.parquet"
     )
+    sleeper_output_file = (
+        PROCESSED_DIR /
+        "sleeper_props.parquet"
+    )
 
     try:
         events = get_events()
@@ -448,6 +456,16 @@ def fetch_current_props():
             redact_api_key(ud_exc),
         )
 
+    try:
+        fetch_and_save_sleeper_props(
+            output_path=sleeper_output_file,
+        )
+    except Exception as sleeper_exc:
+        print(
+            "WARNING: Sleeper props fetch failed:",
+            redact_api_key(sleeper_exc),
+        )
+
     snapshot_path = save_live_snapshot(df)
 
     print()
@@ -635,21 +653,47 @@ def fetch_current_game_lines():
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser()
+    sys.argv = normalize_help_argv()
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Download MLB data: Statcast, sportsbook props, game lines, "
+            "probables, and fantasy / Sleeper pick'em lines."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python fetch_data.py --props\n"
+            "      → current_props.parquet + PP/UD fantasy + Sleeper (if APIFY_TOKEN set)\n"
+            "  python fetch_data.py --sleeper-props\n"
+            "      → sleeper_props.parquet only (Apify; both teams per game)\n"
+            "  python fetch_data.py --statcast --start 2026-03-25 --end 2026-09-05\n"
+            "  python fetch_data.py --game-lines\n"
+            "  python fetch_data.py --probables\n"
+            "\n"
+            "Run with --help or -help for this list."
+        ),
+    )
 
     parser.add_argument(
         "--start",
-        help="YYYY-MM-DD"
+        metavar="YYYY-MM-DD",
+        help="Statcast window start (required with --statcast).",
     )
 
     parser.add_argument(
         "--end",
-        help="YYYY-MM-DD"
+        metavar="YYYY-MM-DD",
+        help="Statcast window end (required with --statcast).",
     )
 
     parser.add_argument(
         "--statcast",
-        action="store_true"
+        action="store_true",
+        help=(
+            "Download Statcast pitch-level data for --start through --end "
+            "→ data/raw/statcast_*.parquet."
+        ),
     )
 
     parser.add_argument(
@@ -657,21 +701,28 @@ if __name__ == "__main__":
         action="store_true",
         help=(
             "Re-download Statcast even when a cached parquet exists "
-            "(also used when cached data stops before --end)"
+            "(also when cached data stops before --end)."
         ),
     )
 
     parser.add_argument(
         "--props",
-        action="store_true"
+        action="store_true",
+        help=(
+            "Fetch today's sportsbook player props (Odds API) "
+            "→ data/processed/current_props.parquet; also refreshes "
+            "prizepicks_fantasy_lines.parquet, underdog_fantasy_lines.parquet, "
+            "and sleeper_props.parquet (when APIFY_TOKEN is set); appends "
+            "an intraday snapshot under data/raw/odds/snapshots/."
+        ),
     )
 
     parser.add_argument(
         "--game-lines",
         action="store_true",
         help=(
-            "Fetch game totals and run lines "
-            "(totals, spreads) for today's slate"
+            "Fetch game totals and run lines for today's slate "
+            "→ data/processed/current_game_lines.parquet."
         ),
     )
 
@@ -680,7 +731,7 @@ if __name__ == "__main__":
         action="store_true",
         help=(
             "Fetch probable starting pitchers for today's slate "
-            "→ daily_probables.parquet"
+            "→ data/processed/daily_probables.parquet."
         ),
     )
 
@@ -688,8 +739,19 @@ if __name__ == "__main__":
         "--underdog-fantasy",
         action="store_true",
         help=(
-            "Fetch Underdog batter fantasy-point lines "
-            "→ underdog_fantasy_lines.parquet"
+            "Fetch Underdog batter fantasy-point lines only "
+            "→ data/processed/underdog_fantasy_lines.parquet "
+            "(public API; no full --props run)."
+        ),
+    )
+
+    parser.add_argument(
+        "--sleeper-props",
+        action="store_true",
+        help=(
+            "Refetch all Sleeper Picks MLB props via Apify "
+            "→ data/processed/sleeper_props.parquet "
+            "(requires APIFY_TOKEN in .env; standalone, no Odds API)."
         ),
     )
 
@@ -725,3 +787,7 @@ if __name__ == "__main__":
     if args.underdog_fantasy:
 
         fetch_and_save_underdog_fantasy_lines()
+
+    if args.sleeper_props:
+
+        fetch_and_save_sleeper_props()

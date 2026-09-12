@@ -51,6 +51,42 @@ JOIN_END=""
 TRAIN_START_OVERRIDE=""
 TRAIN_END_OVERRIDE=""
 
+usage() {
+  cat <<'EOF'
+run_pitcher_outs_learning.sh — Track 1 pitcher K / walks / outs learning loop
+
+Usage:
+  ./run_pitcher_outs_learning.sh [flags]
+
+Default markets: pitcher_strikeouts, pitcher_walks, pitcher_outs.
+
+Flags:
+  --market MARKET      Run one market only (repeatable). Default: all three.
+  --fetch-props        Refresh props during embedded run_daily (default: skip props).
+  --skip-daily         Skip embedded ./run_daily.sh (join + retrain only).
+  --skip-join          Skip log_outcomes / join step.
+  --skip-retrain       Skip retrain_market.py.
+  --skip-repredict     Skip final predict.py refresh.
+  --fit-distributional Also train Poisson dist heads after each retrain.
+  --skip-game-lines    Pass --skip-game-lines to embedded run_daily.
+  --skip-probables     Pass --skip-probables to embedded run_daily.
+  --join-start DATE    Outcome join window start (default: season start).
+  --join-end DATE      Outcome join window end (default: yesterday).
+  --train-start DATE   Retrain feature window start override.
+  --train-end DATE     Retrain feature window end override.
+  --streamlit          Open board after pipeline.
+  --port N             Streamlit port (default: 8501).
+
+Steps (default: all enabled):
+  1. ./run_daily.sh [--skip-props ...]  → features + predict (logs count markets)
+  2. scripts/log_outcomes.py            → join actuals to predictions log
+  3. scripts/retrain_market.py          → retrain classifier per market
+  4. predict.py                         → refresh predictions CSV
+
+Run ./help.sh for all pipeline commands.
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --market)
@@ -113,19 +149,8 @@ while [[ $# -gt 0 ]]; do
       STREAMLIT_PORT="$2"
       shift 2
       ;;
-    -h|--help)
-      sed -n '2,15p' "$0" | sed 's/^# \?//'
-      echo ""
-      echo "Markets (default: all three): pitcher_strikeouts, pitcher_walks, pitcher_outs"
-      echo ""
-      echo "Steps (default: all enabled):"
-      echo "  1. ./run_daily.sh [--skip-props ...]  → ensure features + predict (logs count markets)"
-      echo "  2. scripts/log_outcomes.py (per market) → join actuals to predictions log"
-      echo "  3. scripts/retrain_market.py (per market) → retrain classifier"
-      echo "  4. predict.py                         → refresh predictions CSV for the board"
-      echo ""
-      echo "Optional: --fit-distributional runs fit_distributional.py after each retrain."
-      echo "Board: Pred # and Dist Over % populate when dist models exist."
+    -h|-help|--help)
+      usage
       exit 0
       ;;
     *)

@@ -304,7 +304,9 @@ def render_hitters_life_board(
         "Career and recent AVG, xwOBA, wRC+, PP/UD fantasy lines, H2H vs the "
         "probable starter, pitch-type wOBA, Batter Score v2/v3, and L5 "
         "total-bases log (left = most recent). Select a game to open the "
-        "Rotowire lineup filter. Light green on season/H2H AVG > .300."
+        "Rotowire lineup filter. Light green on season/H2H AVG > .300. "
+        "**Orange** PP/UD fantasy = lower posted line between the two books; "
+        "**sky blue** = same line on both (matches Top 10 batter score board)."
     )
     render_tb_log_color_legend()
     markets = st.session_state.get(f"{key_prefix}_markets", [])

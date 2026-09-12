@@ -9,6 +9,7 @@ from ui.pick_builder import (
 from ui.player import render_player_page
 from ui.top_lists import render_top_over_page, render_top_under_page
 from ui.hitters_life_page import render_hitters_life_page
+from ui.sleeper_picks_page import render_sleeper_picks_page
 from ui.version_compare import render_version_compare_page
 from batter_score_data import enrich_with_batter_score
 from ui.formatting import compare_view_path, enrich_with_over_under_probs
@@ -124,6 +125,8 @@ elif view == "hitters_life":
     )
     df = load_board_data(version, _predictions_mtime)
     render_hitters_life_page(df, version)
+elif view == "sleeper_picks":
+    render_sleeper_picks_page(version)
 else:
     _predictions_file = predictions_path(version)
     _predictions_mtime = (

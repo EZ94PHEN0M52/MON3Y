@@ -8,6 +8,7 @@
 #   ./run_daily.sh --skip-props # skip Odds API prop fetch (use cached props)
 #   ./run_daily.sh --skip-game-lines # skip game totals/spreads fetch
 #   ./run_daily.sh --skip-probables # skip MLB probable SP fetch
+#   ./run_daily.sh --skip-official-lineups # skip Rotowire Today's Lineup fetch
 #   ./run_daily.sh --include-today  # feature window through today (evening, after games + Statcast)
 #   ./run_daily.sh --streamlit --include-today
 #   ./run_daily.sh --streamlit --port 8502
@@ -39,8 +40,47 @@ RUN_STREAMLIT=false
 SKIP_PROPS=false
 SKIP_GAME_LINES=false
 SKIP_PROBABLES=false
+SKIP_OFFICIAL_LINEUPS=false
 INCLUDE_TODAY=false
 STREAMLIT_PORT=8501
+
+usage() {
+  cat <<'EOF'
+run_daily.sh — MLB Prop Model V2 daily pipeline
+
+Usage:
+  ./run_daily.sh [flags]
+
+Flags:
+  (none)               Full pipeline: ensure features → props → game lines →
+                       probables → predict (v2). Evening run when props post.
+  --streamlit          Open Streamlit board after predict (default port 8501).
+  --port N             Streamlit port when using --streamlit.
+  --include-today      Feature / Statcast / predict window through calendar
+                       today (not just yesterday). Use after games finish and
+                       Statcast has posted — refreshes L5/L10 and TB logs.
+  --skip-props         Reuse cached current_props.parquet (and fantasy / Sleeper
+                       parquets from the last --props fetch). Morning form refresh.
+  --skip-game-lines    Reuse cached current_game_lines.parquet.
+  --skip-probables     Reuse cached daily_probables.parquet.
+  --skip-official-lineups
+                       Skip Rotowire Today's Lineup fetch (use cached/projected).
+  --train              Also retrain all V2 classifiers on the 2025 window.
+                       First-time setup or schema bump — not for daily use.
+
+Typical schedule:
+  ./run_daily.sh --streamlit                    # evening: fresh props + board
+  ./run_daily.sh --skip-props --streamlit       # morning: fresh form, same lines
+
+After probables, run_daily also tries Rotowire official lineups (best-effort).
+If not posted yet, boards/analyzer keep projected default vs SP hand.
+
+Props step also runs: fetch_data.py --props (Odds API + PP/UD fantasy + Sleeper
+when APIFY_TOKEN is set). Sleeper-only refresh: python fetch_data.py --sleeper-props
+
+Run ./help.sh for all pipeline commands.
+EOF
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -64,6 +104,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_PROBABLES=true
       shift
       ;;
+    --skip-official-lineups)
+      SKIP_OFFICIAL_LINEUPS=true
+      shift
+      ;;
     --include-today)
       INCLUDE_TODAY=true
       shift
@@ -76,13 +120,13 @@ while [[ $# -gt 0 ]]; do
       STREAMLIT_PORT="$2"
       shift 2
       ;;
-    -h|--help)
-      sed -n '2,13p' "$0" | sed 's/^# \?//'
+    -h|-help|--help)
+      usage
       exit 0
       ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 [--train] [--skip-props] [--skip-game-lines] [--skip-probables] [--include-today] [--streamlit] [--port PORT]" >&2
+      echo "Run $0 --help" >&2
       exit 1
       ;;
   esac
@@ -144,6 +188,15 @@ if $SKIP_PROBABLES; then
 else
   echo ">>> Fetching today's probable starting pitchers..."
   python fetch_data.py --probables
+fi
+
+if $SKIP_OFFICIAL_LINEUPS; then
+  echo ">>> Skipping official lineups (--skip-official-lineups); using cached/projected lineups"
+else
+  echo ">>> Fetching Rotowire official lineups (best-effort)..."
+  if ! ./run_official_lineups.sh; then
+    echo "WARNING: Official lineup fetch failed or not posted yet; using projected/default lineups."
+  fi
 fi
 
 if $RUN_TRAIN; then

@@ -17,6 +17,7 @@ from batter_score import (  # noqa: E402
     ComponentGates,
     GameLine,
     PitchTypeMatchup,
+    RecentFormWeights,
     Weights,
     compute_batter_score_partial,
     compute_batter_score_phase_b,
@@ -1339,6 +1340,109 @@ def test_compute_batter_score_v3_counting_fallback():
     assert "counting fallback" in result.partial_label
 
 
+def test_v1_statcast_blend_recent_form():
+    from batter_score import (
+        V1_COUNTING_BLEND,
+        V1_STATCAST_BLEND,
+        recent_form_index,
+        recent_form_index_v1,
+        statcast_recent_index_v1,
+    )
+
+    base = dict(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+    )
+    counting_only = BatterInputs(**base)
+    blended = BatterInputs(
+        **base,
+        l5_xwoba=0.380,
+        l10_wrc_plus=120.0,
+    )
+
+    counting = recent_form_index(counting_only, RecentFormWeights())
+    statcast = statcast_recent_index_v1(blended)
+    expected = V1_COUNTING_BLEND * counting + V1_STATCAST_BLEND * statcast
+
+    assert abs(recent_form_index_v1(blended, RecentFormWeights()) - expected) < 1e-6
+    assert recent_form_index_v1(counting_only, RecentFormWeights()) == counting
+
+
+def test_v1_statcast_blend_season_baseline():
+    from batter_score import (
+        V1_COUNTING_BLEND,
+        V1_STATCAST_BLEND,
+        season_baseline_index,
+        season_baseline_index_v1,
+        statcast_season_index_v1,
+    )
+
+    base = dict(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+    )
+    counting_only = BatterInputs(**base)
+    blended = BatterInputs(
+        **base,
+        season_xwoba=0.350,
+        season_wrc_plus=110.0,
+    )
+
+    counting = season_baseline_index(counting_only)
+    statcast = statcast_season_index_v1(blended)
+    expected = V1_COUNTING_BLEND * counting + V1_STATCAST_BLEND * statcast
+
+    assert abs(season_baseline_index_v1(blended) - expected) < 1e-6
+    assert season_baseline_index_v1(counting_only) == counting
+
+
+def test_compute_batter_score_partial_v1_statcast_blend():
+    from batter_score import (
+        V1_COUNTING_BLEND,
+        V1_STATCAST_BLEND,
+        recent_form_index,
+        season_baseline_index,
+        statcast_recent_index_v1,
+        statcast_season_index_v1,
+    )
+
+    base = dict(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+    )
+    batter = BatterInputs(
+        **base,
+        season_xwoba=0.350,
+        season_wrc_plus=110.0,
+        l5_xwoba=0.380,
+        l10_wrc_plus=120.0,
+    )
+
+    counting = compute_batter_score_partial(batter)
+    blended = compute_batter_score_partial(
+        batter,
+        statcast_blend_v1=True,
+    )
+
+    expected_season = (
+        V1_COUNTING_BLEND * season_baseline_index(batter)
+        + V1_STATCAST_BLEND * statcast_season_index_v1(batter)
+    )
+    expected_recent = (
+        V1_COUNTING_BLEND * recent_form_index(batter, RecentFormWeights())
+        + V1_STATCAST_BLEND * statcast_recent_index_v1(batter)
+    )
+
+    assert abs(blended.season_baseline - expected_season) < 1e-6
+    assert abs(blended.recent_form - expected_recent) < 1e-6
+    assert blended.season_baseline != counting.season_baseline or (
+        blended.recent_form != counting.recent_form
+    )
+
+
 if __name__ == "__main__":
     test_renormalize_phase_a_weights()
     test_renormalize_phase_b_weights()
@@ -1388,4 +1492,7 @@ if __name__ == "__main__":
     test_v3_statcast_index_helpers()
     test_compute_batter_score_v3_full()
     test_compute_batter_score_v3_counting_fallback()
+    test_v1_statcast_blend_recent_form()
+    test_v1_statcast_blend_season_baseline()
+    test_compute_batter_score_partial_v1_statcast_blend()
     print("All batter score tests passed.")

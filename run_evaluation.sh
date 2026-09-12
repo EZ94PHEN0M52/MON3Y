@@ -31,6 +31,30 @@ VERSION="v2"
 MIN_EDGE=""
 MIN_EV=""
 
+usage() {
+  cat <<'EOF'
+run_evaluation.sh — Phase 6 evaluation pipeline (offline)
+
+Usage:
+  ./run_evaluation.sh [flags]
+
+Runs in order: backtest → fit_calibrators → fit_distributional.
+Separate from run_daily.sh — use when historical props and models exist.
+
+Flags:
+  --start YYYY-MM-DD   Backtest / calibration window start (default: 2025-04-01).
+  --end YYYY-MM-DD     Window end (default: 2025-06-30).
+  --version v1|v2      Model version (default: v2).
+  --min-edge N         Minimum edge filter passed to backtest.py.
+  --min-ev N           Minimum EV filter passed to backtest.py.
+
+Does not fetch live props or regenerate today's board. After evaluation, run
+./run_daily.sh so live predict picks up new calibrators and dist models.
+
+Run ./help.sh for all pipeline commands.
+EOF
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --start)
@@ -53,13 +77,13 @@ while [ $# -gt 0 ]; do
       MIN_EV="$2"
       shift 2
       ;;
-    -h|--help)
-      sed -n '2,13p' "$0" | sed 's/^# \?//'
+    -h|-help|--help)
+      usage
       exit 0
       ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--version v1|v2] [--min-edge N] [--min-ev N]" >&2
+      echo "Run $0 --help" >&2
       exit 1
       ;;
   esac

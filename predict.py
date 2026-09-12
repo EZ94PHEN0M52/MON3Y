@@ -535,25 +535,49 @@ def generate_predictions(
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser()
+    import sys
+
+    from scripts.cli_help import normalize_help_argv
+
+    sys.argv = normalize_help_argv()
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Score today's props with trained models → predictions CSV "
+            "for the Streamlit board."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python predict.py --version v2\n"
+            "  python predict.py --start 2026-03-25 --end 2026-09-05 --version v2\n"
+            "\n"
+            "Usually invoked by ./run_daily.sh; run directly to re-score only."
+        ),
+    )
 
     parser.add_argument(
         "--start",
         default="2026-03-25",
-        help="Feature file start date (YYYY-MM-DD)"
+        metavar="YYYY-MM-DD",
+        help="Feature parquet start date (must match built features).",
     )
 
     parser.add_argument(
         "--end",
         default="2026-08-16",
-        help="Feature file end date (YYYY-MM-DD)"
+        metavar="YYYY-MM-DD",
+        help="Feature parquet end date (typically yesterday or today).",
     )
 
     parser.add_argument(
         "--version",
         default="v2",
         choices=["v1", "v2"],
-        help="Model version to use (default: v2)"
+        help=(
+            "Model version: v2 (default, opponent + park) or v1 (rolling form only). "
+            "Writes data/predictions/predictions_v2.csv or predictions.csv."
+        ),
     )
 
     args = parser.parse_args()

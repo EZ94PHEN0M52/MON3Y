@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from ui.glossary import MARKET_LABELS
+from utils import parse_commence_datetime
 
 PROBABILITY_COLUMNS = (
     "model_probability",
@@ -47,10 +48,13 @@ def format_predicted_count(value, decimals=1):
 
 
 def format_commence_time(value):
-    if pd.isna(value) or not value:
+    if pd.isna(value) or value is None or value == "":
         return "—"
     try:
-        dt = pd.to_datetime(value, utc=True).tz_convert("America/New_York")
+        dt = parse_commence_datetime(value)
+        if dt is None:
+            return "—"
+        dt = dt.tz_convert("America/New_York")
         hour = dt.hour % 12 or 12
         am_pm = "AM" if dt.hour < 12 else "PM"
         return f"{dt.strftime('%b')} {dt.day}, {hour}:{dt.minute:02d} {am_pm} ET"
@@ -176,6 +180,12 @@ def hitters_life_path():
     from urllib.parse import urlencode
 
     return "/?" + urlencode({"view": "hitters_life"})
+
+
+def sleeper_picks_path():
+    from urllib.parse import urlencode
+
+    return "/?" + urlencode({"view": "sleeper_picks"})
 
 
 def compare_view_path():

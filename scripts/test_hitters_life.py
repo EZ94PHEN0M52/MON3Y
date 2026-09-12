@@ -308,6 +308,12 @@ def test_build_hitters_life_row_includes_batter_scores_and_fantasy():
         "hitters_life_data.lookup_arsenal_weighted_woba",
         return_value=None,
     ), patch(
+        "ui.player_stats.lookup_prizepicks_fantasy_line",
+        return_value=6.5,
+    ), patch(
+        "ui.player_stats.lookup_underdog_fantasy_line",
+        return_value=6.0,
+    ), patch(
         "ui.player_stats.format_prizepicks_fantasy_line",
         return_value="6.5",
     ), patch(
@@ -335,6 +341,8 @@ def test_build_hitters_life_row_includes_batter_scores_and_fantasy():
     assert built["batter_score_v3_display"] == "74.0 (Full)"
     assert built["pp_fantasy_line"] == "6.5"
     assert built["ud_fantasy_line"] == "6.0"
+    assert built["_pp_line"] == 6.5
+    assert built["_ud_line"] == 6.0
     assert "batter_score_v1_display" not in built
     assert "sp_arsenal" not in built
 
@@ -391,6 +399,21 @@ def test_hitters_life_board_highlights():
     assert batting_average_style("Szn .290 · L5 .300 · L10 .295") == STYLE_BAT_AVG_GREEN
     assert h2h_avg_style(0.400) == STYLE_VS_PITCHER_AVG
     assert h2h_avg_style(0.250) == ""
+
+    fantasy_board = pd.DataFrame(
+        [
+            {
+                "player": "Value Bat",
+                "player_link": "/?player=Value+Bat#Value Bat",
+                "pp_fantasy_line": "5.5",
+                "ud_fantasy_line": "6.0",
+                "_pp_line": 5.5,
+                "_ud_line": 6.0,
+            }
+        ]
+    )
+    fantasy_html = style_hitters_life_board(fantasy_board).to_html()
+    assert STYLE_FANTASY_LOWER in fantasy_html
 
     board = pd.DataFrame(
         [

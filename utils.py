@@ -75,19 +75,34 @@ def mlb_schedule_date(when: datetime | None = None) -> str:
     return when.astimezone(MLB_SCHEDULE_TZ).strftime("%Y-%m-%d")
 
 
-def game_date_from_commence(commence_time) -> str | None:
-    """Map Odds API commence_time to the MLB Eastern schedule date."""
+def parse_commence_datetime(commence_time):
+    """Parse ISO strings or Unix epoch seconds/ms to a UTC pandas Timestamp."""
     if commence_time is None or pd.isna(commence_time):
         return None
 
+    if isinstance(commence_time, (int, float, np.integer, np.floating)):
+        value = float(commence_time)
+        if value <= 0:
+            return None
+        # Sleeper/Apify sends game_start as Unix milliseconds.
+        if value >= 1e11:
+            return pd.to_datetime(value, unit="ms", utc=True)
+        if value >= 1e9:
+            return pd.to_datetime(value, unit="s", utc=True)
+
     try:
-        return (
-            pd.to_datetime(commence_time, utc=True)
-            .tz_convert(MLB_SCHEDULE_TZ)
-            .strftime("%Y-%m-%d")
-        )
+        return pd.to_datetime(commence_time, utc=True)
     except (TypeError, ValueError):
         return None
+
+
+def game_date_from_commence(commence_time) -> str | None:
+    """Map Odds API commence_time to the MLB Eastern schedule date."""
+    dt = parse_commence_datetime(commence_time)
+    if dt is None:
+        return None
+
+    return dt.tz_convert(MLB_SCHEDULE_TZ).strftime("%Y-%m-%d")
 
 
 def normalize_player_key(name) -> str:

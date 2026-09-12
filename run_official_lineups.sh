@@ -23,7 +23,31 @@ MAX_RUNS=0
 PYTHON_ARGS=()
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \?//'
+  cat <<'EOF'
+run_official_lineups.sh — Rotowire official lineups (pre-game)
+
+Usage:
+  ./run_official_lineups.sh [flags] [-- extra args for update script]
+
+Fetches Rotowire "Today's Lineup" for the slate → rotowire_lineups.parquet.
+Hitter's Life uses official 1–9 order when cached; else default vs SP hand.
+
+Flags:
+  --watch SECONDS      Poll every N seconds until lineups post or max runs hit.
+  --max-runs N         Stop after N fetch attempts (with --watch).
+  -h, --help, -help    Show this help.
+
+Passes remaining args to scripts/update_official_lineups.py (e.g. --dry-run,
+--teams NYY,BOS,LAD).
+
+Examples:
+  ./run_official_lineups.sh
+  ./run_official_lineups.sh --dry-run
+  ./run_official_lineups.sh -- --teams NYY,LAD
+  ./run_official_lineups.sh --watch 300 --max-runs 12
+
+Run ./help.sh for all pipeline commands.
+EOF
 }
 
 while [[ $# -gt 0 ]]; do
@@ -44,7 +68,7 @@ while [[ $# -gt 0 ]]; do
       MAX_RUNS="$2"
       shift 2
       ;;
-    -h|--help)
+    -h|-help|--help)
       usage
       exit 0
       ;;
