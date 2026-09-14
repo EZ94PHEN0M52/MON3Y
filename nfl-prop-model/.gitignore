@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+
+.env
+
+data/raw/
+data/processed/
+data/predictions/
+data/backtest/
+
+models/
+.DS_Store
