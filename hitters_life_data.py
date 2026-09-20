@@ -955,7 +955,11 @@ def build_hitters_life_row(
     *,
     pitch_bucket: str,
 ) -> dict:
-    from batter_score_data import lookup_batter_score, lookup_batter_score_v2, lookup_batter_score_v3
+    from batter_score_data import (
+        lookup_batter_score,
+        lookup_batter_score_v2,
+        lookup_batter_score_hybrid,
+    )
     from ui.formatting import format_name_with_hand
 
     game_context = build_game_context(
@@ -974,7 +978,7 @@ def build_hitters_life_row(
         version=version,
         game_context=game_context,
     )
-    result_v3 = lookup_batter_score_v3(
+    result_hybrid = lookup_batter_score_hybrid(
         row["player"],
         version=version,
         game_context=game_context,
@@ -1010,7 +1014,10 @@ def build_hitters_life_row(
         game_context,
     )
 
-    from ui.batter_score import format_batter_score_display
+    from ui.batter_score import (
+        format_batter_score_display,
+        format_hybrid_batter_score_display,
+    )
     from ui.player_stats import (
         format_prizepicks_fantasy_line,
         format_underdog_fantasy_line,
@@ -1023,8 +1030,15 @@ def build_hitters_life_row(
 
     batter_score_v2 = result_v2.batter_score if result_v2 else None
     batter_score_v2_label = (result_v2.partial_label if result_v2 else "") or ""
-    batter_score_v3 = result_v3.batter_score if result_v3 else None
-    batter_score_v3_label = (result_v3.partial_label if result_v3 else "") or ""
+    batter_score_hybrid = (
+        result_hybrid.batter_score if result_hybrid else None
+    )
+    batter_score_hybrid_label = (
+        (result_hybrid.partial_label if result_hybrid else "") or ""
+    )
+    batter_score_hybrid_tag = (
+        (result_hybrid.quality_tag if result_hybrid else "") or ""
+    )
 
     return {
         "player": row["player"],
@@ -1073,9 +1087,10 @@ def build_hitters_life_row(
             batter_score_v2,
             batter_score_v2_label,
         ),
-        "batter_score_v3_display": format_batter_score_display(
-            batter_score_v3,
-            batter_score_v3_label,
+        "batter_score_hybrid_display": format_hybrid_batter_score_display(
+            batter_score_hybrid,
+            batter_score_hybrid_label,
+            batter_score_hybrid_tag,
         ),
         "pitch_woba": format_pitch_woba(woba),
         "total_bases_log": format_total_bases_game_log(

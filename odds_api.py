@@ -31,10 +31,46 @@ PROP_MARKETS = [
     "pitcher_earned_runs",
 ]
 
+# PrizePicks Goblins/Demons are exposed as *_alternate on Odds API us_dfs
+# (e.g. batter_hits_alternate). Standard PROP_MARKETS alone miss goblin-only
+# cards like a hits Goblin with no featured hits line.
+PRIZEPICKS_PROP_MARKETS = PROP_MARKETS + [
+    f"{market}_alternate" for market in PROP_MARKETS
+]
+
 # PrizePicks DFS fantasy score (us_dfs region only).
 PRIZEPICKS_FANTASY_MARKETS = [
     "batter_fantasy_score",
 ]
+
+
+def _canonical_prop_market(market_key):
+    """Map Odds API alternate markets onto the base prop key used by models."""
+    if not market_key:
+        return market_key
+    if market_key.endswith("_alternate"):
+        return market_key[: -len("_alternate")]
+    return market_key
+
+
+def _prizepicks_line_tier(bookmaker_key, market_key, odds):
+    """
+    Infer PrizePicks Goblin/Demon from Odds API conventions.
+
+    Docs: Goblins/Demons live under *_alternate; Goblins use default odds,
+    Demons are assigned even odds (+100).
+    """
+    if str(bookmaker_key or "").strip().lower() != "prizepicks":
+        return None
+    if not str(market_key or "").endswith("_alternate"):
+        return None
+    try:
+        price = int(odds)
+    except (TypeError, ValueError):
+        return "goblin"
+    if price == 100:
+        return "demon"
+    return "goblin"
 
 
 # US books split across two Odds API regions. Some player props (notably
@@ -135,8 +171,11 @@ def normalize_event(
             "markets",
             []
         ):
-            market_key = (
+            raw_market_key = (
                 market.get("key")
+            )
+            market_key = _canonical_prop_market(
+                raw_market_key
             )
 
             market_update = (
@@ -152,6 +191,12 @@ def normalize_event(
                 )
 
                 side = outcome.get("name")
+                odds = outcome.get("price")
+                line_tier = _prizepicks_line_tier(
+                    bookmaker_key,
+                    raw_market_key,
+                    odds,
+                )
 
                 # Game markets use team/outcome name, not player props.
                 if market_key in (
@@ -201,9 +246,7 @@ def normalize_event(
                         ),
 
                     "odds":
-                        outcome.get(
-                            "price"
-                        ),
+                        odds,
 
                     "last_update":
                         market_update,
@@ -211,6 +254,9 @@ def normalize_event(
                     "fetched_at":
                         fetched_at,
                 }
+
+                if line_tier is not None:
+                    row["line_tier"] = line_tier
 
                 if snapshot_date is not None:
                     row["snapshot_date"] = (
@@ -316,9 +362,15 @@ def get_event_prizepicks_props(
     event_id,
     markets=None,
 ):
-    """PrizePicks player props for standard markets (Odds API us_dfs region)."""
+    """
+    PrizePicks player props (Odds API us_dfs), including Goblin/Demon alts.
+
+    Default markets are ``PRIZEPICKS_PROP_MARKETS`` (featured + ``*_alternate``).
+    Alternate rows are normalized onto the base market key (e.g.
+    ``batter_hits_alternate`` → ``batter_hits``) with ``line_tier`` goblin/demon.
+    """
     if markets is None:
-        markets = PROP_MARKETS
+        markets = PRIZEPICKS_PROP_MARKETS
 
     return _get_event_prizepicks(
         event_id,

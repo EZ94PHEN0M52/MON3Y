@@ -198,7 +198,7 @@ def test_h2h_omitted_below_min_pa():
         season_avg_raw_points=3.8,
         game_log=_sample_games(),
         opponent_pitcher_era_l5=4.00,
-        h2h_pa=5,
+        h2h_pa=MIN_PA_H2H - 1,
         h2h_avg_raw_points=5.0,
     )
 
@@ -255,7 +255,15 @@ def test_partial_score_equals_renormalized_blend():
 
 
 def test_min_pa_h2h_constant():
-    assert MIN_PA_H2H == 10
+    assert MIN_PA_H2H == 3
+    assert MIN_PA_H2H_MANUAL == MIN_PA_H2H
+
+
+def test_h2h_pitcher_form_blend_constant():
+    from batter_score import H2H_PITCHER_FORM_BLEND, H2H_PITCHER_FORM_BLEND_MANUAL
+
+    assert H2H_PITCHER_FORM_BLEND == 0.55
+    assert H2H_PITCHER_FORM_BLEND_MANUAL == H2H_PITCHER_FORM_BLEND
 
 
 def test_min_pa_h2h_board_constant():
@@ -279,11 +287,12 @@ def test_estimate_h2h_avg_raw_points_from_hits_ab():
 
     # 3/8 = .375 → A-grade AVG → full raw-points scale
     assert abs(estimate_h2h_avg_raw_points_from_hits_ab(3, 8) - 6.0) < 1e-6
-    # 1/4 = .250 → D-grade
-    assert abs(estimate_h2h_avg_raw_points_from_hits_ab(1, 4) - 1.5) < 1e-6
+    # 1/4 = .250 → B-grade (AVG_THRESHOLDS ≥ .248)
+    assert abs(estimate_h2h_avg_raw_points_from_hits_ab(1, 4) - 4.5) < 1e-6
 
 
 def test_manual_h2h_blended_below_statcast_min_pa():
+    """H2H with PA between old 10-bar and new 3-bar still blends (default)."""
     batter = BatterInputs(
         name="Test Batter",
         season_avg_raw_points=3.8,
@@ -291,7 +300,6 @@ def test_manual_h2h_blended_below_statcast_min_pa():
         opponent_pitcher_era_l5=4.00,
         h2h_pa=8,
         h2h_avg_raw_points=5.0,
-        h2h_manual_override=True,
     )
 
     blended = pitcher_form_index(batter)
@@ -305,7 +313,7 @@ def test_manual_h2h_blended_below_statcast_min_pa():
     )
 
     assert blended != era_only
-    assert MIN_PA_H2H_MANUAL == 3
+    assert MIN_PA_H2H == 3
 
 
 def test_apply_manual_h2h_override():
@@ -768,6 +776,20 @@ def test_format_vs_pitcher_h2h_and_era_fallback():
         opposing_sp_era_l5=3.10,
     )
     assert _format_vs_pitcher(zero_avg) == "0/3 .000"
+
+
+def test_vs_pitcher_style_greens_career_h2h_avg():
+    from ui.batter_score_highlights import (
+        STYLE_VS_PITCHER_AVG,
+        h2h_avg_from_vs_pitcher,
+        vs_pitcher_style,
+    )
+
+    assert h2h_avg_from_vs_pitcher("5/11 .455 · career") == 0.455
+    assert vs_pitcher_style("5/11 .455 · career") == STYLE_VS_PITCHER_AVG
+    assert vs_pitcher_style("2/7 .286 · career") == ""
+    assert vs_pitcher_style("4/10 .400") == STYLE_VS_PITCHER_AVG
+    assert vs_pitcher_style("SP ERA L5 2.75") == ""
 
 
 def test_statcast_cache_key_prefers_cumulative_season_shard(
@@ -1340,6 +1362,92 @@ def test_compute_batter_score_v3_counting_fallback():
     assert "counting fallback" in result.partial_label
 
 
+def test_weights_hybrid_constant():
+    from batter_score import WEIGHTS_HYBRID
+
+    assert abs(WEIGHTS_HYBRID.season_baseline - 0.25) < 1e-9
+    assert abs(WEIGHTS_HYBRID.recent_form - 0.25) < 1e-9
+    assert abs(WEIGHTS_HYBRID.matchup_grade - 0.35) < 1e-9
+    assert abs(WEIGHTS_HYBRID.pitcher_form - 0.15) < 1e-9
+
+
+def test_quality_form_tag_states():
+    from batter_score import QUALITY_TAG_THRESHOLD, quality_form_tag
+
+    base = dict(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+    )
+    assert quality_form_tag(BatterInputs(**base)) == "Q—"
+
+    # Inflate quality windows so quality >> form → Q↑
+    high_q = BatterInputs(
+        **base,
+        season_xwoba=0.450,
+        l5_xwoba=0.450,
+        l10_xwoba=0.450,
+        season_wrc_plus=160.0,
+        l30_wrc_plus=160.0,
+        l10_wrc_plus=160.0,
+    )
+    assert quality_form_tag(high_q) == "Q↑"
+
+    low_q = BatterInputs(
+        **base,
+        season_xwoba=0.200,
+        l5_xwoba=0.200,
+        l10_xwoba=0.200,
+        season_wrc_plus=60.0,
+        l30_wrc_plus=60.0,
+        l10_wrc_plus=60.0,
+    )
+    assert quality_form_tag(low_q) == "Q↓"
+    assert QUALITY_TAG_THRESHOLD == 8.0
+
+
+def test_score_batter_inputs_hybrid_attaches_quality_tag():
+    from batter_score import PitchTypeMatchup, WEIGHTS_HYBRID
+    from batter_score_data import _score_batter_inputs_hybrid
+
+    arsenal = [
+        PitchTypeMatchup("4-Seam Fastball", 1.0, 0.350, 0.280),
+    ]
+    batter = BatterInputs(
+        name="Test Batter",
+        season_avg_raw_points=3.8,
+        game_log=_sample_games(),
+        opponent_pitcher_arsenal=arsenal,
+        opponent_pitcher_arsenal_v2=arsenal,
+        opponent_pitcher_fip_l5=3.50,
+        opposing_sp_name="Test SP",
+        season_xwoba=0.320,
+        l5_xwoba=0.330,
+        l10_xwoba=0.310,
+        season_wrc_plus=100.0,
+        l10_wrc_plus=105.0,
+        l30_wrc_plus=102.0,
+    )
+    result = _score_batter_inputs_hybrid(
+        batter,
+        game_context={"game_date": "2026-09-20", "home_team": "A", "away_team": "B"},
+    )
+    assert result is not None
+    assert result.quality_tag in {"Q↑", "Q↓", "Q≈", "Q—"}
+    assert result.partial_label == "Full"
+    assert result.active_weights["season_baseline"] == WEIGHTS_HYBRID.season_baseline
+    assert abs(result.active_weights["matchup_grade"] - 0.35) < 1e-6
+
+
+def test_format_hybrid_batter_score_display():
+    from ui.batter_score import format_hybrid_batter_score_display
+
+    assert format_hybrid_batter_score_display(74.0, "Full", "Q↑") == (
+        "74.0 (Full) Q↑"
+    )
+    assert format_hybrid_batter_score_display(None, "", "Q↑") == "—"
+
+
 def test_v1_statcast_blend_recent_form():
     from batter_score import (
         V1_COUNTING_BLEND,
@@ -1456,6 +1564,7 @@ if __name__ == "__main__":
     test_h2h_blended_at_min_pa()
     test_partial_score_equals_renormalized_blend()
     test_min_pa_h2h_constant()
+    test_h2h_pitcher_form_blend_constant()
     test_min_pa_h2h_board_constant()
     test_parse_h2h_fraction()
     test_estimate_h2h_avg_raw_points_from_hits_ab()
@@ -1473,12 +1582,13 @@ if __name__ == "__main__":
     test_build_game_context_uses_eastern_schedule_date()
     test_enrich_with_batter_score_columns()
     test_infer_player_kind()
-    test_markets_for_kind_includes_stolen_bases()
+    test_markets_for_kind_excludes_home_runs_and_stolen_bases()
     test_coerce_mlb_id_handles_nan()
     test_pitcher_rows_by_sp_nan_id_falls_back_to_name()
     test_batter_score_validation_loader()
     test_score_batter_as_of_point_in_time()
     test_format_vs_pitcher_h2h_and_era_fallback()
+    test_vs_pitcher_style_greens_career_h2h_avg()
     test_compute_h2h_stats_kirk_vs_seymour()
     test_statcast_cache_key_prefers_cumulative_season_shard()
     test_v2_arsenal_uses_merged_statcast()
@@ -1492,6 +1602,10 @@ if __name__ == "__main__":
     test_v3_statcast_index_helpers()
     test_compute_batter_score_v3_full()
     test_compute_batter_score_v3_counting_fallback()
+    test_weights_hybrid_constant()
+    test_quality_form_tag_states()
+    test_score_batter_inputs_hybrid_attaches_quality_tag()
+    test_format_hybrid_batter_score_display()
     test_v1_statcast_blend_recent_form()
     test_v1_statcast_blend_season_baseline()
     test_compute_batter_score_partial_v1_statcast_blend()

@@ -239,9 +239,9 @@ def _hitters_life_column_config(pitch_bucket: str):
             "Batter score v2",
             help=GLOSSARY["batter_score_v2"],
         ),
-        "batter_score_v3_display": st.column_config.TextColumn(
-            "Batter score v3",
-            help=GLOSSARY["batter_score_v3"],
+        "batter_score_hybrid_display": st.column_config.TextColumn(
+            "Batter score hybrid",
+            help=GLOSSARY["batter_score_hybrid"],
         ),
         "pitch_woba": st.column_config.TextColumn(
             f"wOBA vs {pitch_bucket}",
@@ -316,7 +316,7 @@ def render_hitters_life_board(
     st.markdown("##### Batting average")
     st.caption(
         "Career and recent AVG, xwOBA, wRC+, PP/UD fantasy lines, H2H vs the "
-        "probable starter, pitch-type wOBA, Batter Score v2/v3, and L5 "
+        "probable starter, pitch-type wOBA, Batter Score v2/hybrid, and L5 "
         "total-bases log (left = most recent). Select a game to open the "
         "Rotowire lineup filter. Light green on season/H2H AVG > .300. "
         "**Orange** PP/UD fantasy = lower posted line between the two books; "

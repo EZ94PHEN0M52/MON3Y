@@ -60,7 +60,11 @@ def l5_l10_style(l5_pct, l10_pct) -> str:
 
 
 def h2h_avg_from_vs_pitcher(text) -> float | None:
-    """Parse AVG from a Vs pitcher cell like ``4/10 .400`` (first line only)."""
+    """
+    Parse AVG from a Vs pitcher / H2H cell.
+
+    Accepts ``4/10 .400``, ``4/10 .400 · career``, or a bare ``.400``.
+    """
     if text is None or (isinstance(text, float) and pd.isna(text)):
         return None
 
@@ -68,18 +72,16 @@ def h2h_avg_from_vs_pitcher(text) -> float | None:
     if not cell or cell == "—" or cell.startswith("SP ERA"):
         return None
 
-    parts = cell.split()
-    if len(parts) < 2:
-        return None
+    # Prefer an explicit .AVG token (works with trailing ``· career``).
+    for token in reversed(cell.replace("·", " ").split()):
+        token = token.strip()
+        if token.startswith(".") and len(token) > 1:
+            try:
+                return float(f"0{token}")
+            except ValueError:
+                continue
 
-    avg_token = parts[-1]
-    if not avg_token.startswith("."):
-        return None
-
-    try:
-        return float(f"0{avg_token}")
-    except ValueError:
-        return None
+    return None
 
 
 def vs_pitcher_style(vs_pitcher_text) -> str:

@@ -66,7 +66,7 @@ HOT_BATTER_SCORE_COLUMNS = [
     "l5_l10_pct",
     "batter_score_display",
     "batter_score_v2_display",
-    "batter_score_v3_display",
+    "batter_score_hybrid_display",
     "total_bases_log",
 ]
 
@@ -288,9 +288,9 @@ def _hot_batter_score_column_config():
             "money, orange hot, yellow warm."
         ),
     )
-    config["batter_score_v3_display"] = st.column_config.TextColumn(
-        "Batter score v3",
-        help=GLOSSARY["batter_score_v3"],
+    config["batter_score_hybrid_display"] = st.column_config.TextColumn(
+        "Batter score hybrid",
+        help=GLOSSARY["batter_score_hybrid"],
     )
     return config
 
@@ -391,7 +391,7 @@ def render_hot_batter_score_board(
         "and **wRC+** from the Hitter's Life batting board. "
         "Respects the Market type filter only (not Edge / EV). "
         f"{GLOSSARY['batter_score']} {GLOSSARY['batter_score_v2']} "
-        f"{GLOSSARY['batter_score_v3']}"
+        f"{GLOSSARY['batter_score_hybrid']}"
     )
 
     if hot_df.empty:

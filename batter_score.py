@@ -10,10 +10,10 @@ A composite 0-100 rating for a batter's upcoming game, blending:
   4. Pitcher recent form      opposing starter's ERA, last 5      - 15%
 
 Phase A uses season baseline + recent form only; matchup is gated off
-until Phase D. Phase B adds opposing SP ERA (L5) and optional H2H blend
-into pitcher form when the starter is known; weights renormalize among
-active components. Phase D enables usage-weighted pitch-type matchup when
-Statcast arsenal data is available for the opposing SP.
+until Phase D. Phase B adds opposing SP ERA/FIP (L5) and optional H2H blend
+into pitcher form when the starter is known (≥3 PA; 55% H2H); weights
+renormalize among active components. Phase D enables usage-weighted
+pitch-type matchup when Statcast arsenal data is available for the opposing SP.
 
 All weights and thresholds are configurable via the dataclasses below -
 nothing is hardcoded in the scoring functions themselves.
@@ -28,16 +28,16 @@ MIN_GAMES_BATTER_SCORE = 5
 MIN_GAMES_FULL_FORM = 10
 
 # Minimum PA vs a specific SP before H2H stats are blended (Phase B).
-MIN_PA_H2H = 10
+MIN_PA_H2H = 3
 
-# Lower bar when the user supplies career H2H H/AB manually (pre-2024 history).
-MIN_PA_H2H_MANUAL = 3
+# Alias kept for older call sites / docs (same as MIN_PA_H2H).
+MIN_PA_H2H_MANUAL = MIN_PA_H2H
 
 # Share of pitcher-form index from H2H when PA threshold is met.
-H2H_PITCHER_FORM_BLEND = 0.30
+H2H_PITCHER_FORM_BLEND = 0.55
 
-# Stronger blend when the user supplies career H2H H/AB (manual calculator).
-H2H_PITCHER_FORM_BLEND_MANUAL = 0.55
+# Alias kept for older call sites / docs (same as H2H_PITCHER_FORM_BLEND).
+H2H_PITCHER_FORM_BLEND_MANUAL = H2H_PITCHER_FORM_BLEND
 
 # Optional soft fallback when SP is TBD: team opp_team_earned_runs proxy at
 # reduced weight (disabled by default — see batter_score_data.py).
@@ -90,6 +90,17 @@ WEIGHTS_V3 = Weights(
     matchup_grade=0.35,
     pitcher_form=0.15,
 )
+
+# Hybrid: v1 form blend + v2 Savant matchup/FIP (see README Design).
+WEIGHTS_HYBRID = Weights(
+    season_baseline=0.25,
+    recent_form=0.25,
+    matchup_grade=0.35,
+    pitcher_form=0.15,
+)
+
+# Path A quality tag: |quality − form| above this → Q↑ / Q↓ (else Q≈).
+QUALITY_TAG_THRESHOLD = 8.0
 
 XWOBA_BLEND_SEASON = 0.20
 XWOBA_BLEND_L5 = 0.50
@@ -473,10 +484,9 @@ def matchup_grade_index(
 
 
 def _h2h_form_index(batter: BatterInputs) -> Optional[float]:
-    min_pa = MIN_PA_H2H_MANUAL if batter.h2h_manual_override else MIN_PA_H2H
     if (
         batter.h2h_pa is None
-        or batter.h2h_pa < min_pa
+        or batter.h2h_pa < MIN_PA_H2H
         or batter.h2h_avg_raw_points is None
     ):
         return None
@@ -553,12 +563,7 @@ def pitcher_form_index(
     if h2h_index is None:
         return pitcher_metric_index
 
-    effective_blend = (
-        H2H_PITCHER_FORM_BLEND_MANUAL
-        if batter.h2h_manual_override
-        else h2h_blend
-    )
-    blend = max(0.0, min(1.0, effective_blend))
+    blend = max(0.0, min(1.0, h2h_blend))
     return (1.0 - blend) * pitcher_metric_index + blend * h2h_index
 
 
@@ -587,6 +592,8 @@ class BatterScoreResult:
     h2h_ab: Optional[int] = None
     sp_tbd: bool = False
     team_proxy_used: bool = False
+    # Hybrid path A: Q↑ / Q↓ / Q≈ / Q— (None when not computed).
+    quality_tag: Optional[str] = None
 
     def __str__(self):
         lines = [
@@ -900,6 +907,56 @@ def production_index(batter: BatterInputs) -> float:
         + WRC_BLEND_L30 * float(batter.l30_wrc_plus)
     )
     return wrc_plus_to_index(blended)
+
+
+def quality_confirmation_index(batter: BatterInputs) -> Optional[float]:
+    """
+    50/50 expected quality (xwOBA) + production (wRC+) on 0–100.
+
+    Returns None when Statcast quality windows are incomplete.
+    """
+    if not statcast_quality_ready(batter):
+        return None
+    return 0.5 * expected_quality_index(batter) + 0.5 * production_index(
+        batter
+    )
+
+
+def v1_form_confirmation_index(
+    batter: BatterInputs,
+    rf_weights: RecentFormWeights = None,
+) -> float:
+    """50/50 v1 season + recent form indices (counting + Statcast blend)."""
+    rf_weights = rf_weights or RecentFormWeights()
+    return 0.5 * season_baseline_index_v1(batter) + 0.5 * recent_form_index_v1(
+        batter,
+        rf_weights,
+    )
+
+
+def quality_form_tag(
+    batter: BatterInputs,
+    *,
+    rf_weights: RecentFormWeights = None,
+    threshold: float = QUALITY_TAG_THRESHOLD,
+) -> str:
+    """
+    Path A display tag comparing Statcast quality to v1 form.
+
+    Q↑ = quality ahead of results · Q↓ = results ahead of quality ·
+    Q≈ = aligned · Q— = Statcast quality unavailable.
+    """
+    quality = quality_confirmation_index(batter)
+    if quality is None:
+        return "Q—"
+
+    form = v1_form_confirmation_index(batter, rf_weights=rf_weights)
+    delta = quality - form
+    if delta > threshold:
+        return "Q↑"
+    if delta < -threshold:
+        return "Q↓"
+    return "Q≈"
 
 
 def partial_score_label_v3(

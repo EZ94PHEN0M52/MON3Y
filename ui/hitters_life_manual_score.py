@@ -33,10 +33,10 @@ def render_manual_h2h_batter_score(
         "Enter career batting average vs today's probable starter as **hits/AB** "
         f"(e.g. `3/8`). Everything else is pulled from cached data; your H2H "
         f"overrides Statcast (2024+) and blends into **pitcher form** (55% of "
-        f"that component when AB ≥ {MIN_PA_H2H_MANUAL}). Pitcher form is 15% "
-        "of the full score, so a strong career line can move the total by "
-        "several points. This score is **separate** from the Batter Score "
-        "columns on the boards below."
+        f"that component when AB ≥ {MIN_PA_H2H_MANUAL} — same rule as automatic "
+        "H2H). Pitcher form is 15% of the full score, so a strong career line "
+        "can move the total by several points. This score is **separate** from "
+        "the Batter Score columns on the boards below."
     )
 
     if slate.empty:

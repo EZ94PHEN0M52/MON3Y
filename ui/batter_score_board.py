@@ -9,7 +9,7 @@ from batter_score_data import (
     is_batter_score_validated,
     lookup_batter_score,
     lookup_batter_score_v2,
-    lookup_batter_score_v3,
+    lookup_batter_score_hybrid,
     lookup_h2h_board_stats,
 )
 from hitters_life_data import (
@@ -20,7 +20,10 @@ from hitters_life_data import (
     format_total_bases_game_log,
     lookup_arsenal_weighted_woba,
 )
-from ui.batter_score import format_batter_score_display
+from ui.batter_score import (
+    format_batter_score_display,
+    format_hybrid_batter_score_display,
+)
 from ui.batter_score_highlights import (
     HIT_RATE_THRESHOLD,
     STYLE_FANTASY_EQUAL,
@@ -53,7 +56,7 @@ from ui.player_stats import (
     rolling_pp_fantasy_over_rates,
 )
 
-# Board "Vs pitcher" column — lower bar than MIN_PA_H2H (10) used in scoring.
+# Board "Vs pitcher" column — same 3-PA bar as scoring H2H blend.
 MIN_PA_H2H_BOARD = 3
 
 BATTER_SCORE_BY_GAME_DISPLAY_COLUMNS = [
@@ -70,7 +73,7 @@ BATTER_SCORE_BY_GAME_DISPLAY_COLUMNS = [
     "l5_l10_pct",
     "batter_score_display",
     "batter_score_v2_display",
-    "batter_score_v3_display",
+    "batter_score_hybrid_display",
     "total_bases_log",
 ]
 
@@ -308,7 +311,7 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
         version=version,
         game_context=game_context,
     )
-    result_v3 = lookup_batter_score_v3(
+    result_hybrid = lookup_batter_score_hybrid(
         row["player"],
         version=version,
         game_context=game_context,
@@ -375,9 +378,10 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
             result_v2.batter_score if result_v2 else None,
             (result_v2.partial_label if result_v2 else "") or "",
         ),
-        "batter_score_v3_display": format_batter_score_display(
-            result_v3.batter_score if result_v3 else None,
-            (result_v3.partial_label if result_v3 else "") or "",
+        "batter_score_hybrid_display": format_hybrid_batter_score_display(
+            result_hybrid.batter_score if result_hybrid else None,
+            (result_hybrid.partial_label if result_hybrid else "") or "",
+            (result_hybrid.quality_tag if result_hybrid else "") or "",
         ),
         "batter_score_label": row.get("batter_score_label") or "",
         "_game": row.get("game") or "",
@@ -436,6 +440,8 @@ def render_top_batter_scores(
         "**red outline** = UD lower + L5/L10 green. "
         "**Batter score v2** uses Savant pitch-type matchup (Sinker, Sweeper, etc.) "
         "instead of five pitch buckets. "
+        "**Batter score hybrid** = v1 form + v2 matchup/FIP with quality tag "
+        "(Q↑ / Q↓ / Q≈). "
     )
     if is_batter_score_validated():
         caption += GLOSSARY["batter_score_validated"]
@@ -560,9 +566,9 @@ def _batter_score_table_column_config():
             "Batter score v2",
             help=GLOSSARY["batter_score_v2"],
         ),
-        "batter_score_v3_display": st.column_config.TextColumn(
-            "Batter score v3",
-            help=GLOSSARY["batter_score_v3"],
+        "batter_score_hybrid_display": st.column_config.TextColumn(
+            "Batter score hybrid",
+            help=GLOSSARY["batter_score_hybrid"],
         ),
     }
     config.update(_hand_split_avg_column_config())

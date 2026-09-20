@@ -346,10 +346,11 @@ def test_build_hitters_life_row_includes_batter_scores_and_fantasy():
         "batter_score_data.lookup_batter_score_v2",
         return_value=mock_result_v2,
     ), patch(
-        "batter_score_data.lookup_batter_score_v3",
+        "batter_score_data.lookup_batter_score_hybrid",
         return_value=MagicMock(
             batter_score=74.0,
             partial_label="Full",
+            quality_tag="Q≈",
         ),
     ), patch(
         "hitters_life_data.build_vs_pitcher_fields",
@@ -397,7 +398,7 @@ def test_build_hitters_life_row_includes_batter_scores_and_fantasy():
         built = build_hitters_life_row(row, "v2", pitch_bucket="Fastball")
 
     assert built["batter_score_v2_display"] == "72.1 (Full)"
-    assert built["batter_score_v3_display"] == "74.0 (Full)"
+    assert built["batter_score_hybrid_display"] == "74.0 (Full) Q≈"
     assert built["pp_fantasy_line"] == "6.5"
     assert built["ud_fantasy_line"] == "6.0"
     assert built["_pp_line"] == 6.5

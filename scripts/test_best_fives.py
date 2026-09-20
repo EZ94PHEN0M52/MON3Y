@@ -36,7 +36,8 @@ def test_build_perfect_l5_props_df_filters_and_dedupes():
                 "market": "batter_hits",
                 "line": 0.5,
                 "l5_pct": 1.0,
-                "bookmaker": "draftkings",
+                "bookmaker": "PrizePicks",
+                "bookmaker_key": "prizepicks",
                 "odds": -110,
                 "edge": 0.05,
                 "ev": 0.04,
@@ -52,7 +53,8 @@ def test_build_perfect_l5_props_df_filters_and_dedupes():
                 "market": "batter_hits",
                 "line": 0.5,
                 "l5_pct": 1.0,
-                "bookmaker": "fanduel",
+                "bookmaker": "FanDuel",
+                "bookmaker_key": "fanduel",
                 "odds": -105,
                 "edge": 0.08,
                 "ev": 0.07,
@@ -67,8 +69,9 @@ def test_build_perfect_l5_props_df_filters_and_dedupes():
                 "player": "B",
                 "market": "batter_hits",
                 "line": 0.5,
-                "l5_pct": 0.8,
-                "bookmaker": "draftkings",
+                "l5_pct": 1.0,
+                "bookmaker": "DraftKings",
+                "bookmaker_key": "draftkings",
                 "odds": -110,
                 "edge": 0.02,
                 "ev": 0.01,
@@ -84,12 +87,15 @@ def test_build_perfect_l5_props_df_filters_and_dedupes():
 
     with patch(
         "ui.best_fives_board.is_perfect_l5_prop",
-        side_effect=lambda player, market, line, version="v2": player == "A",
+        side_effect=lambda player, market, line, version="v2": True,
     ):
         result = build_perfect_l5_props_df(df, "v2")
 
-    assert len(result) == 1
-    assert result.iloc[0]["player"] == "A"
+    # All books; one best-EV row per player/market (A→FanDuel, B→DraftKings).
+    assert len(result) == 2
+    by_player = result.set_index("player")
+    assert by_player.loc["A", "bookmaker"] == "FanDuel"
+    assert by_player.loc["B", "bookmaker"] == "DraftKings"
 
 
 def test_build_perfect_l5_pp_fantasy_df():

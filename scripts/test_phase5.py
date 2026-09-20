@@ -103,6 +103,54 @@ def test_excluded_prop_markets_not_fetched() -> None:
     assert "batter_home_runs" not in MODEL_MAP
 
 
+def test_prizepicks_alternate_markets_normalize_to_base() -> None:
+    from odds_api import (
+        PRIZEPICKS_PROP_MARKETS,
+        PROP_MARKETS,
+        normalize_event,
+    )
+
+    for market in PROP_MARKETS:
+        assert f"{market}_alternate" in PRIZEPICKS_PROP_MARKETS
+
+    event = {
+        "id": "e1",
+        "commence_time": "2026-09-20T20:10:00Z",
+        "home_team": "Home",
+        "away_team": "Away",
+        "bookmakers": [
+            {
+                "title": "PrizePicks",
+                "key": "prizepicks",
+                "markets": [
+                    {
+                        "key": "batter_hits_alternate",
+                        "last_update": "t",
+                        "outcomes": [
+                            {
+                                "name": "Over",
+                                "description": "Dustin Harris",
+                                "point": 0.5,
+                                "price": -137,
+                            },
+                            {
+                                "name": "Over",
+                                "description": "Star Player",
+                                "point": 1.5,
+                                "price": 100,
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    rows = normalize_event(event)
+    assert rows[0]["market"] == "batter_hits"
+    assert rows[0]["line_tier"] == "goblin"
+    assert rows[1]["line_tier"] == "demon"
+
+
 def test_schema_version_bumped() -> None:
     assert PARQUET_FEATURE_SCHEMA_VERSION == "3"
 

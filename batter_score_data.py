@@ -44,6 +44,7 @@ from batter_score import (
     WEIGHTS_V1,
     WEIGHTS_V2,
     WEIGHTS_V3,
+    WEIGHTS_HYBRID,
     Weights,
     compute_batter_score_partial,
     compute_batter_score_phase_b,
@@ -928,6 +929,87 @@ def _score_batter_inputs_v3(
         return None
 
 
+def _attach_quality_tag(
+    result: BatterScoreResult,
+    batter: BatterInputs,
+) -> BatterScoreResult:
+    from batter_score import quality_form_tag
+
+    return replace(result, quality_tag=quality_form_tag(batter))
+
+
+def _score_batter_inputs_hybrid(
+    batter: BatterInputs,
+    *,
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    """
+    Hybrid: v1 form blend + v2 Savant matchup + FIP L5 @ WEIGHTS_HYBRID.
+
+    Attaches path A quality_tag (Q↑ / Q↓ / Q≈ / Q—).
+    """
+    sp_named = bool(batter.opposing_sp_name and game_context is not None)
+    sp_ready = sp_named and batter.opponent_pitcher_fip_l5 is not None
+    matchup_ready_v2 = (
+        sp_ready
+        and arsenal_ready(batter.opponent_pitcher_arsenal_v2)
+    )
+
+    try:
+        if matchup_ready_v2:
+            batter_h = replace(
+                batter,
+                opponent_pitcher_arsenal=batter.opponent_pitcher_arsenal_v2,
+            )
+            result = compute_batter_score_phase_d(
+                batter_h,
+                gates=PHASE_D_GATES,
+                weights=WEIGHTS_HYBRID,
+                pitcher_form_use_fip=True,
+                statcast_blend_v1=True,
+            )
+            return _attach_quality_tag(result, batter_h)
+
+        if sp_ready:
+            result = compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                weights=WEIGHTS_HYBRID,
+                pitcher_form_use_fip=True,
+                statcast_blend_v1=True,
+            )
+            return _attach_quality_tag(result, batter)
+
+        if (
+            USE_TEAM_PITCHING_PROXY
+            and batter.team_opp_earned_runs_proxy is not None
+            and game_context is not None
+            and not sp_named
+        ):
+            result = compute_batter_score_phase_b(
+                batter,
+                gates=PHASE_B_GATES,
+                sp_tbd=True,
+                team_proxy=True,
+                weights=WEIGHTS_HYBRID,
+                pitcher_form_use_fip=True,
+                statcast_blend_v1=True,
+            )
+            return _attach_quality_tag(result, batter)
+
+        result = compute_batter_score_partial(
+            batter,
+            gates=PHASE_A_GATES,
+            weights=WEIGHTS_HYBRID,
+            sp_tbd=game_context is not None and not sp_named,
+            pitcher_form_use_fip=True,
+            statcast_blend_v1=True,
+        )
+        return _attach_quality_tag(result, batter)
+    except ValueError:
+        return None
+
+
 def _normalize_game_date(value) -> str:
     return str(pd.to_datetime(value).strftime("%Y-%m-%d"))
 
@@ -1296,6 +1378,27 @@ def score_batter_v3(
     return _score_batter_inputs_v3(batter, game_context=game_context)
 
 
+def score_batter_hybrid(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    """
+    Hybrid Batter Score: v1 form blend + v2 Savant matchup/FIP @ WEIGHTS_HYBRID.
+
+    Includes path A quality_tag on the result.
+    """
+    batter = build_batter_inputs(
+        player_name,
+        version=version,
+        game_context=game_context,
+    )
+    if batter is None:
+        return None
+
+    return _score_batter_inputs_hybrid(batter, game_context=game_context)
+
+
 def _score_cache_key(
     player_name: str,
     game_context: Optional[dict],
@@ -1480,6 +1583,48 @@ def lookup_batter_score_v3(
     cache_key = _score_cache_key(player_name, game_context) + "|v3"
 
     return _cached_score_v3(
+        cache_key,
+        player_name,
+        version,
+        context_json,
+    )
+
+
+@lru_cache(maxsize=256)
+def _cached_score_hybrid(
+    cache_key: str,
+    player_name: str,
+    version: str,
+    game_context_json: Optional[str],
+) -> Optional[BatterScoreResult]:
+    game_context = None
+    if game_context_json:
+        import json
+
+        game_context = json.loads(game_context_json)
+
+    return score_batter_hybrid(
+        player_name,
+        version=version,
+        game_context=game_context,
+    )
+
+
+def lookup_batter_score_hybrid(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> Optional[BatterScoreResult]:
+    import json
+
+    context_json = (
+        json.dumps(game_context, sort_keys=True)
+        if game_context
+        else None
+    )
+    cache_key = _score_cache_key(player_name, game_context) + "|hybrid"
+
+    return _cached_score_hybrid(
         cache_key,
         player_name,
         version,

@@ -119,7 +119,7 @@ def test_build_hot_batter_score_df_filters_and_limits() -> None:
             "_batter_score": row["batter_score"],
             "batter_score_display": str(row["batter_score"]),
             "batter_score_v2_display": str(row["batter_score"]),
-            "batter_score_v3_display": str(row["batter_score"]),
+            "batter_score_hybrid_display": str(row["batter_score"]),
             "player_link": row["player"],
             "game_time": "7:05p",
             "opposing_sp": "SP",

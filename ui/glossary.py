@@ -246,16 +246,18 @@ GLOSSARY = {
         "player and market."
     ),
     "best_fives_page": (
-        "Perfect last-5 boards for today's slate: (1) props that cleared the "
-        "posted line in each of the last 5 completed games, and (2) batters "
-        "that cleared their PrizePicks hitter fantasy line in each of the "
-        "last 5 games. Both require a full five-game sample (strictly over)."
+        "Perfect last-5 boards for today's slate: (1) props (any book) that "
+        "cleared the posted line in each of the last 5 completed games, and "
+        "(2) batters that cleared their PrizePicks hitter fantasy line in "
+        "each of the last 5 games. Both require a full five-game sample "
+        "(strictly over). Board (1) keeps one best-EV row per player/market."
     ),
     "batter_score": (
         "Composite 0–100 rating for a batter's upcoming game. **Phase D** "
         "adds usage-weighted pitch-type matchup (30%) when the opposing SP "
         "and Statcast arsenal data are available. **Phase B** adds SP ERA "
-        "(L5) and optional H2H vs that SP (≥10 PA) in pitcher form (15%). "
+        "(L5) and optional H2H vs that SP (≥3 PA; 55% of pitcher form) in "
+        "pitcher form (15%). "
         "Season baseline (30%) and recent form (25%) always active when data "
         "exists. Label **Full** when all four components are active; "
         "**Partial** when matchup or SP data is missing; **Low sample** when "
@@ -272,13 +274,24 @@ GLOSSARY = {
         "available; otherwise partial renormalization applies."
     ),
     "batter_score_v3": (
-        "Batter Score v3 uses **25% / 25% / 35% / 15%** weights. "
-        "**Expected quality (25%)** — blended xwOBA (20% season, 50% L5, "
-        "30% L10; Savant PA rules). **Production index (25%)** — blended "
-        "wRC+ (35% season, 65% L30; pooled PAs). **Matchup (35%)** and "
-        "**pitcher form (15%)** match v2 (Savant pitch types + FIP L5). "
-        "Falls back to H+TB+BB season/recent when Statcast quality windows "
-        "are unavailable (**counting fallback** label)."
+        "Batter Score v3 (archived column — replaced on boards by hybrid). "
+        "Uses **25% / 25% / 35% / 15%** weights with **expected quality** "
+        "(blended xwOBA) and **production index** (blended wRC+) replacing "
+        "counting form; matchup/pitcher form match v2. Kept in code for "
+        "tests and research; not shown on boards."
+    ),
+    "batter_score_hybrid": (
+        "Hybrid Batter Score: **v1 form** (60% H+TB+BB + 40% Statcast blend) "
+        "+ **v2 matchup** (Savant pitch types) + **FIP L5** pitcher form at "
+        "**25% / 25% / 35% / 15%**. Display-only quality tag: **Q↑** process "
+        "ahead of results, **Q↓** results ahead of process, **Q≈** aligned, "
+        "**Q—** Statcast quality windows missing. Does not change Model % / "
+        "Edge / EV. See README Design."
+    ),
+    "batter_score_quality_tag": (
+        "Path A quality indicator beside hybrid score. Compares a 50/50 "
+        "xwOBA+wRC+ quality index to v1 form; |gap| > 8 → Q↑ or Q↓, else Q≈. "
+        "Does not change the 0–100 hybrid number."
     ),
     "batter_score_season_baseline": (
         "Full-season per-game average of hits + total bases + walks (H+TB+BB), "
@@ -312,15 +325,16 @@ GLOSSARY = {
         "Opposing starter ERA over last 5 starts (letter-graded; lower ERA "
         "= better for the batter). Batter Score **v2** uses **FIP (L5)** "
         "with the league constant from merged Statcast instead of ERA. When "
-        "the batter has ≥10 PA vs that SP, H2H H+TB+BB performance is blended "
-        "in (30% of pitcher form). Gated off when SP is TBD; optional "
+        "the batter has ≥3 PA vs that SP, H2H H+TB+BB performance is blended "
+        "in (55% of pitcher form). Gated off when SP is TBD; optional "
         "team-level opp_team_earned_runs proxy at reduced weight when "
         "enabled in code."
     ),
     "batter_score_h2h": (
         "Career plate appearances vs the listed opposing starter from "
-        "Statcast. Included in pitcher form only when PA ≥ 10; below "
-        "threshold the signal is omitted (not zeroed)."
+        "Statcast (or career override CSV). Included in pitcher form only "
+        "when PA ≥ 3; below threshold the signal is omitted (not zeroed). "
+        "When included, H2H is 55% of pitcher form."
     ),
     "batter_score_partial": (
         "**Form only** or **Partial · SP TBD** — matchup and/or pitcher "

@@ -48,8 +48,8 @@ def build_perfect_l5_props_df(
     """
     Today's slate props with a perfect L5 over-rate vs the posted line.
 
-    Requires five completed games all strictly over the line. One best book
-    per player / market.
+    Includes all books (sportsbooks + PrizePicks). Requires five completed
+    games all strictly over the line. One row per player / market (best EV).
     """
     if df.empty or "l5_pct" not in df.columns:
         return pd.DataFrame()
@@ -164,10 +164,11 @@ def render_perfect_l5_props_board(
 ):
     st.markdown("##### Perfect L5 props")
     st.caption(
-        "All slate props where the player went **over the posted line in each "
-        "of the last 5 completed games** (strictly greater than the line; "
-        "requires a full five-game sample). One best book per player and "
-        "market. Respects the Market filter below."
+        "Props on today's slate where the player went **over the posted line "
+        "in each of the last 5 completed games** (strictly greater than the "
+        "line; requires a full five-game sample). All books; one best-EV row "
+        "per player and market. Respects the Market filter below. "
+        "(The board under this is PrizePicks **hitter fantasy** — separate.)"
     )
 
     markets = st.session_state.get(f"{key_prefix}_markets", [])

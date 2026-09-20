@@ -27,6 +27,18 @@ def format_batter_score_display(
     return text
 
 
+def format_hybrid_batter_score_display(
+    score,
+    label="",
+    quality_tag: str = "",
+) -> str:
+    """Hybrid score display with path A quality tag (Q↑ / Q↓ / Q≈ / Q—)."""
+    text = format_batter_score_display(score, label)
+    if text == "—" or not quality_tag:
+        return text
+    return f"{text} {quality_tag}"
+
+
 def render_batter_score_summary(
     player_name: str,
     version: str = "v2",
