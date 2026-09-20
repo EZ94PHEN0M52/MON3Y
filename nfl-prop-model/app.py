@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from ui.board import render_board
+from ui.sleeper_picks_page import render_sleeper_picks_page
 from utils import predictions_path
 
 st.set_page_config(
@@ -23,6 +24,12 @@ def load_predictions(version: str, predictions_mtime: float) -> pd.DataFrame:
 
 
 def main() -> None:
+    view = st.query_params.get("view")
+
+    if view == "sleeper_picks":
+        render_sleeper_picks_page()
+        return
+
     st.title("NFL Prop Model")
     st.caption(
         "Research board — rolling form + injury gates vs sportsbook lines. "
@@ -34,6 +41,9 @@ def main() -> None:
         ["v2", "v1"],
         help="V2 adds opponent defense, usage (target/rush/snap share), home/away.",
     )
+
+    st.sidebar.markdown("[Sleeper Picks](?view=sleeper_picks)")
+    st.sidebar.divider()
 
     predictions_file = predictions_path(version)
     if not predictions_file.exists():
@@ -55,7 +65,7 @@ def main() -> None:
         "Refresh data:\n\n"
         "```bash\n"
         "python fetch_data.py --injuries --props\n"
-        "python predict.py --version v1\n"
+        "python predict.py --version v2\n"
         "```"
     )
 

@@ -245,6 +245,12 @@ GLOSSARY = {
         "Market / Edge / EV filters as the main board. One best book per "
         "player and market."
     ),
+    "best_fives_page": (
+        "Perfect last-5 boards for today's slate: (1) props that cleared the "
+        "posted line in each of the last 5 completed games, and (2) batters "
+        "that cleared their PrizePicks hitter fantasy line in each of the "
+        "last 5 games. Both require a full five-game sample (strictly over)."
+    ),
     "batter_score": (
         "Composite 0–100 rating for a batter's upcoming game. **Phase D** "
         "adds usage-weighted pitch-type matchup (30%) when the opposing SP "
@@ -252,7 +258,8 @@ GLOSSARY = {
         "(L5) and optional H2H vs that SP (≥10 PA) in pitcher form (15%). "
         "Season baseline (30%) and recent form (25%) always active when data "
         "exists. Label **Full** when all four components are active; "
-        "**Partial** when matchup or SP data is missing. Orthogonal to "
+        "**Partial** when matchup or SP data is missing; **Low sample** when "
+        "fewer than 10 games are available (scores from 5+). Orthogonal to "
         "LightGBM prop probabilities."
     ),
     "batter_score_v2": (
@@ -276,6 +283,21 @@ GLOSSARY = {
     "batter_score_season_baseline": (
         "Full-season per-game average of hits + total bases + walks (H+TB+BB), "
         "scaled to a 0–100 index (6.0 raw points = 100)."
+    ),
+    "avg_vs_rhp": (
+        "Batter's batting average vs right-handed pitchers over the last 5 "
+        "and last 10 game dates with at least one AB vs RHP (Statcast "
+        "``p_throws``). Format: L5 · L10."
+    ),
+    "avg_vs_lhp": (
+        "Batter's batting average vs left-handed pitchers over the last 5 "
+        "and last 10 game dates with at least one AB vs LHP (Statcast "
+        "``p_throws``). Format: L5 · L10."
+    ),
+    "sp_baa": (
+        "Opposing starter's season batting average allowed vs right-handed "
+        "and left-handed batters (Statcast batter ``stand``). Format: "
+        "vs R · vs L."
     ),
     "batter_score_recent_form": (
         "0.7×L5 + 0.3×L10 blend of the same H+TB+BB raw points per game."
@@ -317,6 +339,12 @@ GLOSSARY = {
     "pp_fantasy_line": (
         "PrizePicks posted Over fantasy score line for this hitter (from the "
         "daily us_dfs fetch). Used as the threshold for the L5 / L10 % column."
+    ),
+    "h2h_career_override": (
+        "All-time batter-vs-pitcher line from "
+        "`data/reference/h2h_career_overrides.csv` (ESPN/StatMuse). Used instead "
+        "of Statcast (~1–2 seasons) when the pair is listed. Board cells show "
+        "``· career`` when this override is active."
     ),
     "ud_fantasy_line": (
         "Underdog Fantasy posted Over fantasy-point line for this hitter "

@@ -118,6 +118,8 @@ def render_board(df: pd.DataFrame) -> None:
 
     st.info(EDGE_CALLOUT)
 
+    st.markdown("[Sleeper Picks](?view=sleeper_picks)")
+
     with st.expander("Filters", expanded=True):
         filtered = _filter_frame(df)
 

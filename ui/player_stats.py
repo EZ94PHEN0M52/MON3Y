@@ -442,6 +442,24 @@ def _over_rate(values, line, window):
     return float(np.mean([value > line for value in recent]))
 
 
+def _over_rate_full_window(values, line, window):
+    """
+    Like ``_over_rate``, but requires at least *window* completed games.
+
+    Returns NaN when the sample is shorter than *window* so a short hot streak
+    is not treated as a perfect L5 / L10.
+    """
+    if not values or len(values) < window:
+        return np.nan
+    return _over_rate(values, line, window)
+
+
+def is_perfect_l5_over(values, line) -> bool:
+    """True when the last 5 completed games all strictly exceeded *line*."""
+    rate = _over_rate_full_window(values, line, 5)
+    return not pd.isna(rate) and float(rate) >= 1.0 - 1e-12
+
+
 def _format_l5_l10_pct(l5_pct, l10_pct):
     def _fmt(value):
         if pd.isna(value):
@@ -664,6 +682,51 @@ def rolling_over_rates(player_name, market, line, version="v2"):
         _over_rate(values, line, 5),
         _over_rate(values, line, 10),
     )
+
+
+def market_stat_values(player_name, market, version="v2") -> list[float]:
+    """Chronological market-stat values for L5/L10 checks, or []."""
+    if market not in MARKET_STAT_MAP:
+        return []
+
+    kind, stat_col = MARKET_STAT_MAP[market]
+    cache = _kind_player_game_cache(_kind_player_cache_key(kind, version))
+    if not cache:
+        return []
+
+    player_key = _fuzzy_player_key(player_name, cache.keys())
+    if player_key is None:
+        return []
+
+    player_games = cache[player_key]
+    if stat_col not in player_games.columns:
+        return []
+
+    return (
+        pd.to_numeric(player_games[stat_col], errors="coerce")
+        .dropna()
+        .tolist()
+    )
+
+
+def is_perfect_l5_prop(player_name, market, line, version="v2") -> bool:
+    """True when last 5 games all cleared *line* for *market* (≥5 games)."""
+    return is_perfect_l5_over(
+        market_stat_values(player_name, market, version=version),
+        float(line),
+    )
+
+
+def is_perfect_l5_pp_fantasy(player_name, version="v2") -> bool:
+    """True when last 5 PP fantasy scores all cleared the posted PP line."""
+    from pp_fantasy_scores import player_pp_fantasy_score_values
+
+    pp_line = lookup_prizepicks_fantasy_line(player_name)
+    if pp_line is None:
+        return False
+
+    values = player_pp_fantasy_score_values(player_name, version=version)
+    return is_perfect_l5_over(values, float(pp_line))
 
 
 def enrich_with_l5_l10_pct(df, version="v2"):

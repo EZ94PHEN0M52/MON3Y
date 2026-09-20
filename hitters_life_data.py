@@ -53,16 +53,21 @@ def format_h2h_avg_display(
     *,
     hits: int | None = None,
     ab: int | None = None,
+    career_override: bool = False,
 ) -> str:
     """Display H2H average as ``hits/AB .AVG`` (e.g. ``4/10 .400``)."""
     if h2h_avg is None or (isinstance(h2h_avg, float) and pd.isna(h2h_avg)):
         return "—"
 
     if ab and ab > 0 and hits is not None:
-        return _format_avg_cell(int(hits), int(ab))
+        text = _format_avg_cell(int(hits), int(ab))
+    else:
+        avg_text = f"{float(h2h_avg):.3f}".removeprefix("0")
+        text = avg_text if avg_text.startswith(".") else avg_text
 
-    avg_text = f"{float(h2h_avg):.3f}".removeprefix("0")
-    return avg_text if avg_text.startswith(".") else avg_text
+    if career_override and text != "—":
+        return f"{text} · career"
+    return text
 
 
 def _format_avg_value(value) -> str:
@@ -192,6 +197,198 @@ def format_batting_average_column(
         f"L10 {_format_avg_value(l10)}",
     ]
     return " · ".join(parts)
+
+
+@lru_cache(maxsize=512)
+def _cached_batter_game_hits_ab_by_hand(
+    batter_id: int,
+    cache_key: tuple,
+) -> tuple[tuple[str, str, int, int], ...]:
+    """
+    Per-game hits/AB split by opposing pitcher hand (``p_throws``).
+
+    Each tuple is ``(game_date, hand, hits, ab)`` with hand ``R`` or ``L``.
+    Games with no ABs vs that hand are omitted.
+    """
+    statcast = _load_merged_statcast(cache_key)
+    if statcast is None or statcast.empty:
+        return tuple()
+
+    required = {"batter", "events", "game_date", "p_throws"}
+    if not required.issubset(statcast.columns):
+        return tuple()
+
+    from batter_score_data import _h2h_hits_ab
+
+    rows = statcast[
+        pd.to_numeric(statcast["batter"], errors="coerce").eq(int(batter_id))
+        & statcast["events"].notna()
+        & statcast["p_throws"].astype(str).str.upper().isin(["R", "L"])
+    ].copy()
+    if rows.empty:
+        return tuple()
+
+    rows["game_date_key"] = rows["game_date"].map(lambda value: str(value)[:10])
+    rows["hand"] = rows["p_throws"].astype(str).str.upper()
+
+    games: list[tuple[str, str, int, int]] = []
+    for (game_date, hand), group in rows.groupby(
+        ["game_date_key", "hand"],
+        sort=True,
+    ):
+        hits, ab = _h2h_hits_ab(group["events"])
+        if ab > 0:
+            games.append((str(game_date), str(hand), int(hits), int(ab)))
+
+    return tuple(games)
+
+
+def _games_for_hand(
+    games: tuple[tuple[str, str, int, int], ...],
+    hand: str,
+) -> tuple[tuple[str, int, int], ...]:
+    target = str(hand).upper()
+    return tuple(
+        (game_date, hits, ab)
+        for game_date, game_hand, hits, ab in games
+        if game_hand == target
+    )
+
+
+def lookup_batting_average_vs_hand_windows(
+    player_name: str,
+    version: str = "v2",
+) -> dict[str, Optional[float]]:
+    """
+    L5 / L10 batting average vs RHP and LHP.
+
+    Windows are the last 5 / 10 *games dates* with at least one AB vs that hand
+    (Statcast ``p_throws``), not calendar days.
+    """
+    empty = {
+        "l5_vs_r": None,
+        "l10_vs_r": None,
+        "l5_vs_l": None,
+        "l10_vs_l": None,
+    }
+    player_rows = _batter_rows(player_name, version=version)
+    if player_rows is None or player_rows.empty:
+        return empty
+
+    latest = player_rows.sort_values("game_date").iloc[-1]
+    batter_id = coerce_mlb_id(latest.get("batter"))
+    if batter_id is None:
+        return empty
+
+    games = _cached_batter_game_hits_ab_by_hand(
+        batter_id,
+        _merged_statcast_cache_key(),
+    )
+    vs_r = _games_for_hand(games, "R")
+    vs_l = _games_for_hand(games, "L")
+    return {
+        "l5_vs_r": _avg_from_games(vs_r, window=5),
+        "l10_vs_r": _avg_from_games(vs_r, window=10),
+        "l5_vs_l": _avg_from_games(vs_l, window=5),
+        "l10_vs_l": _avg_from_games(vs_l, window=10),
+    }
+
+
+def format_batting_average_vs_hand_column(
+    player_name: str,
+    version: str,
+    *,
+    hand: str,
+) -> str:
+    """Format ``L5 .xxx · L10 .xxx`` for AVG vs RHP or LHP."""
+    windows = lookup_batting_average_vs_hand_windows(player_name, version)
+    key = "r" if str(hand).upper().startswith("R") else "l"
+    l5 = windows.get(f"l5_vs_{key}")
+    l10 = windows.get(f"l10_vs_{key}")
+    return f"L5 {_format_avg_value(l5)} · L10 {_format_avg_value(l10)}"
+
+
+@lru_cache(maxsize=512)
+def _cached_pitcher_season_baa_vs_stand(
+    pitcher_id: int,
+    cache_key: tuple,
+) -> tuple[Optional[float], Optional[float]]:
+    """Season BAA allowed vs RHB / LHB (batter ``stand``). Returns (vs_R, vs_L)."""
+    statcast = _load_merged_statcast(cache_key)
+    if statcast is None or statcast.empty:
+        return None, None
+
+    required = {"pitcher", "events", "stand"}
+    if not required.issubset(statcast.columns):
+        return None, None
+
+    from batter_score_data import _h2h_hits_ab
+
+    rows = statcast[
+        pd.to_numeric(statcast["pitcher"], errors="coerce").eq(int(pitcher_id))
+        & statcast["events"].notna()
+        & statcast["stand"].astype(str).str.upper().isin(["R", "L"])
+    ]
+    if rows.empty:
+        return None, None
+
+    result: dict[str, Optional[float]] = {"R": None, "L": None}
+    for hand in ("R", "L"):
+        subset = rows[rows["stand"].astype(str).str.upper().eq(hand)]
+        if subset.empty:
+            continue
+        hits, ab = _h2h_hits_ab(subset["events"])
+        if ab > 0:
+            result[hand] = hits / ab
+
+    return result["R"], result["L"]
+
+
+def lookup_opposing_sp_baa_vs_hands(
+    player_name: str,
+    version: str = "v2",
+    game_context: Optional[dict] = None,
+) -> tuple[Optional[float], Optional[float]]:
+    """Opposing SP season BAA vs RHB / LHB for *player_name*'s game."""
+    if not game_context:
+        return None, None
+
+    from batter_score_data import _lookup_opposing_sp_for_context
+
+    player_rows = _batter_rows(player_name, version=version)
+    if player_rows is None or player_rows.empty:
+        return None, None
+
+    latest = player_rows.sort_values("game_date").iloc[-1]
+    batter_team = latest.get("team")
+    if not isinstance(batter_team, str) or not batter_team.strip():
+        return None, None
+
+    _, sp_id = _lookup_opposing_sp_for_context(game_context, batter_team)
+    sp_id = coerce_mlb_id(sp_id)
+    if sp_id is None:
+        return None, None
+
+    return _cached_pitcher_season_baa_vs_stand(
+        sp_id,
+        _merged_statcast_cache_key(),
+    )
+
+
+def format_opposing_sp_baa_column(
+    player_name: str,
+    version: str,
+    game_context: Optional[dict] = None,
+) -> str:
+    """Format opposing SP season BAA as ``vs R .xxx · vs L .xxx``."""
+    vs_r, vs_l = lookup_opposing_sp_baa_vs_hands(
+        player_name,
+        version=version,
+        game_context=game_context,
+    )
+    return (
+        f"vs R {_format_avg_value(vs_r)} · vs L {_format_avg_value(vs_l)}"
+    )
 
 
 # Savant xwOBA: contact uses estimated_woba_using_speedangle; walks/HBP/K use
@@ -674,9 +871,17 @@ def build_vs_pitcher_fields(
         )
 
     h2h_avg = None
+    career_override = False
     if pa is not None and pa >= MIN_PA_H2H_BOARD and ab and ab > 0:
         hit_count = hits if hits is not None else 0
         h2h_avg = hit_count / ab
+        if result is not None and result.opposing_sp_name:
+            from h2h_career_overrides import lookup_career_h2h
+
+            career_override = (
+                lookup_career_h2h(player_name, result.opposing_sp_name)
+                is not None
+            )
 
     sp_era_l5 = None
     if h2h_avg is None and result is not None and result.opposing_sp_era_l5 is not None:
@@ -687,6 +892,7 @@ def build_vs_pitcher_fields(
         "h2h_avg": h2h_avg,
         "h2h_hits": hits if hits is not None else None,
         "h2h_ab": ab,
+        "h2h_career_override": career_override,
         "sp_era_l5": sp_era_l5,
     }
 
@@ -828,12 +1034,28 @@ def build_hitters_life_row(
             vs_pitcher["h2h_avg"],
             hits=vs_pitcher["h2h_hits"],
             ab=vs_pitcher["h2h_ab"],
+            career_override=bool(vs_pitcher.get("h2h_career_override")),
         ),
         "_h2h_avg": vs_pitcher["h2h_avg"],
         "arsenal_woba": format_pitch_woba(arsenal_woba),
         "batting_average": format_batting_average_column(
             row["player"],
             version,
+        ),
+        "avg_vs_rhp": format_batting_average_vs_hand_column(
+            row["player"],
+            version,
+            hand="R",
+        ),
+        "avg_vs_lhp": format_batting_average_vs_hand_column(
+            row["player"],
+            version,
+            hand="L",
+        ),
+        "sp_baa": format_opposing_sp_baa_column(
+            row["player"],
+            version,
+            game_context,
         ),
         "xwoba": format_xwoba_column(
             row["player"],

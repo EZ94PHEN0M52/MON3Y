@@ -92,7 +92,7 @@ fetch nflverse stats + injuries + schedule
 
 - MLB Phases 1–6 (historical odds, consensus, movement, calibration)  
 - Shared code with `mlb-prop-model/` beyond “same repo + Odds API key”  
-- DFS (PrizePicks / Underdog / Sleeper) until the core board works  
+- PrizePicks / Underdog DFS until the Sleeper page is stable  
 - Profit guarantees  
 
 ### Risks (accepted)
@@ -218,6 +218,26 @@ python predict.py --version v2
 ```
 
 V2 adds rolling **target_share / rush_share / offense_snap_pct** and opponent **pass/rush/rec yards allowed** (prior-game means). At predict time, slate opponent + `is_home` are overlaid from the prop event.
+
+## Sleeper Picks
+
+Dedicated Streamlit page (same idea as MLB): mobile Sleeper lines via Apify → `data/processed/sleeper_props.parquet`.
+
+```bash
+# One-time: add APIFY_TOKEN to .env (see .env.example)
+
+# Fetch Sleeper only
+python fetch_data.py --sleeper-props
+
+# Or with Odds API props (auto-runs Sleeper when APIFY_TOKEN is set)
+python fetch_data.py --props
+
+# Board
+streamlit run app.py
+# open Sidebar → Sleeper Picks, or http://localhost:8501/?view=sleeper_picks
+```
+
+Page shows the full filtered props table (**model Over/Under %** on the Sleeper line, multipliers, Over pick %, injury when present) plus a matchup → team → player browser. Unmapped Sleeper markets (anytime TD, longest play, etc.) show `—` for model %.
 
 ## Project layout (target)
 

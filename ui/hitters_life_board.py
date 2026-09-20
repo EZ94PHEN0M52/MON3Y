@@ -176,7 +176,9 @@ def _hitters_life_column_config(pitch_bucket: str):
             "H2H AVG",
             help=(
                 "Career batting average vs this starter as hits/AB and AVG "
-                "(PA ≥ 3). Click column header to sort. Light green when "
+                f"(PA ≥ 3). Prefers all-time overrides "
+                "(`data/reference/h2h_career_overrides.csv`) when present "
+                "(``· career``). Click column header to sort. Light green when "
                 "above .300."
             ),
         ),
@@ -195,6 +197,18 @@ def _hitters_life_column_config(pitch_bucket: str):
                 "L5 above .299. Yellow: season above .300 when neither rolling "
                 "rule applies."
             ),
+        ),
+        "avg_vs_rhp": st.column_config.TextColumn(
+            "AVG vs R",
+            help=GLOSSARY["avg_vs_rhp"],
+        ),
+        "avg_vs_lhp": st.column_config.TextColumn(
+            "AVG vs L",
+            help=GLOSSARY["avg_vs_lhp"],
+        ),
+        "sp_baa": st.column_config.TextColumn(
+            "SP BAA",
+            help=GLOSSARY["sp_baa"],
         ),
         "xwoba": st.column_config.TextColumn(
             "xwOBA",

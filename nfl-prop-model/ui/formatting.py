@@ -27,6 +27,23 @@ def format_pct(value) -> str:
         return "—"
 
 
+def format_commence_time(value) -> str:
+    from utils import parse_commence_datetime
+
+    if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
+        return "—"
+    try:
+        dt = parse_commence_datetime(value)
+        if dt is None:
+            return "—"
+        dt = dt.tz_convert("America/New_York")
+        hour = dt.hour % 12 or 12
+        am_pm = "AM" if dt.hour < 12 else "PM"
+        return f"{dt.strftime('%b')} {dt.day}, {hour}:{dt.minute:02d} {am_pm} ET"
+    except (ValueError, TypeError):
+        return str(value)
+
+
 def format_edge(value) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "—"

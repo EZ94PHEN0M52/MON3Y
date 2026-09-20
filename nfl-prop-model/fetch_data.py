@@ -435,6 +435,14 @@ def main() -> None:
         help="Fetch live Odds API player props for the current slate.",
     )
     parser.add_argument(
+        "--sleeper-props",
+        action="store_true",
+        help=(
+            "Fetch Sleeper Picks NFL props via Apify "
+            "(requires APIFY_TOKEN). Also runs after --props when token is set."
+        ),
+    )
+    parser.add_argument(
         "--snaps",
         action="store_true",
         help="Download nflverse snap counts (needed for V2 offense_snap_pct).",
@@ -468,12 +476,13 @@ def main() -> None:
         or args.schedule
         or args.injuries
         or args.props
+        or args.sleeper_props
         or args.snaps
         or args.team_stats
     ):
         parser.error(
             "Pass at least one of --stats, --schedule, --injuries, "
-            "--props, --snaps, --team-stats"
+            "--props, --sleeper-props, --snaps, --team-stats"
         )
 
     season = resolve_season(args.season)
@@ -497,6 +506,27 @@ def main() -> None:
 
     if args.props:
         fetch_current_props()
+        # Best-effort Sleeper refresh when token is configured.
+        try:
+            from fetch_sleeper_props import (
+                _apify_token,
+                fetch_and_save_sleeper_props,
+            )
+
+            if _apify_token():
+                fetch_and_save_sleeper_props()
+            else:
+                print(
+                    "Skipping Sleeper props (APIFY_TOKEN not set). "
+                    "Add it to .env or run: python fetch_data.py --sleeper-props"
+                )
+        except Exception as exc:
+            print(f"WARNING: Sleeper props fetch failed: {exc}")
+
+    if args.sleeper_props and not args.props:
+        from fetch_sleeper_props import fetch_and_save_sleeper_props
+
+        fetch_and_save_sleeper_props()
 
 
 if __name__ == "__main__":

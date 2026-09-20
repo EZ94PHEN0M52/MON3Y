@@ -56,6 +56,65 @@ def test_avg_from_games_windows():
     assert abs(l5 - (8 / 21)) < 1e-6
 
 
+def test_batting_average_vs_hand_windows_from_games():
+    from hitters_life_data import _games_for_hand
+
+    games = (
+        ("2026-08-01", "R", 2, 4),
+        ("2026-08-02", "L", 0, 3),
+        ("2026-08-03", "R", 1, 3),
+        ("2026-08-04", "R", 3, 4),
+        ("2026-08-05", "L", 2, 4),
+        ("2026-08-06", "R", 0, 2),
+        ("2026-08-07", "R", 1, 3),
+    )
+    vs_r = _games_for_hand(games, "R")
+    vs_l = _games_for_hand(games, "L")
+    assert len(vs_r) == 5
+    assert len(vs_l) == 2
+    assert abs(_avg_from_games(vs_r, window=5) - (7 / 16)) < 1e-9
+    assert abs(_avg_from_games(vs_l, window=5) - (2 / 7)) < 1e-9
+
+
+def test_format_hand_and_sp_baa_columns():
+    from unittest.mock import patch
+
+    from hitters_life_data import (
+        format_batting_average_vs_hand_column,
+        format_opposing_sp_baa_column,
+    )
+
+    with patch(
+        "hitters_life_data.lookup_batting_average_vs_hand_windows",
+        return_value={
+            "l5_vs_r": 0.312,
+            "l10_vs_r": 0.285,
+            "l5_vs_l": 0.250,
+            "l10_vs_l": 0.270,
+        },
+    ):
+        assert format_batting_average_vs_hand_column(
+            "Player",
+            "v2",
+            hand="R",
+        ) == "L5 .312 · L10 .285"
+        assert format_batting_average_vs_hand_column(
+            "Player",
+            "v2",
+            hand="L",
+        ) == "L5 .250 · L10 .270"
+
+    with patch(
+        "hitters_life_data.lookup_opposing_sp_baa_vs_hands",
+        return_value=(0.245, 0.280),
+    ):
+        assert format_opposing_sp_baa_column(
+            "Player",
+            "v2",
+            game_context={"game_date": "2026-08-01"},
+        ) == "vs R .245 · vs L .280"
+
+
 def test_match_player_to_lineup_fuzzy():
     lineup = ["Jackson Chourio", "Brice Turang"]
     assert match_player_to_lineup("J. Chourio", lineup) is False
@@ -343,6 +402,9 @@ def test_build_hitters_life_row_includes_batter_scores_and_fantasy():
     assert built["ud_fantasy_line"] == "6.0"
     assert built["_pp_line"] == 6.5
     assert built["_ud_line"] == 6.0
+    assert "avg_vs_rhp" in built
+    assert "avg_vs_lhp" in built
+    assert "sp_baa" in built
     assert "batter_score_v1_display" not in built
     assert "sp_arsenal" not in built
 
@@ -451,6 +513,8 @@ def test_hitters_life_board_highlights():
 if __name__ == "__main__":
     test_parse_rotowire_lineups_html()
     test_avg_from_games_windows()
+    test_batting_average_vs_hand_windows_from_games()
+    test_format_hand_and_sp_baa_columns()
     test_match_player_to_lineup_fuzzy()
     test_hitters_life_player_link_shows_name_only()
     test_sp_arsenal_column()

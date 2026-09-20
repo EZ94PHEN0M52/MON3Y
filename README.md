@@ -7,7 +7,7 @@
 
 **Table of contents:** [Quick notes](#quick-notes) · [Quick start](#quick-start-for-beginners) · [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Official lineups (pre-game)](#official-rotowire-lineups-pre-game) · [Stuff strikeout model (v2)](#stuff-strikeout-model-v2) · [Pitcher outs learning](#pitcher-outs-learning-loop-track-1) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
 
-> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder, PP/Underdog fantasy boards, **Hitter's Life**). **Batter Score v3** (xwOBA + wRC+ form) sits beside v1/v2 on batter score boards — v1/v2 math unchanged. **Hitter's Life** batting board adds **xwOBA** and **wRC+** columns (Savant-aligned, merged Statcast). **Stuff K (v2)** needs a one-time **`./run_pitcher_strikeout_stuff.sh`** — then daily predict picks it up automatically. Close to first pitch, run **`./run_official_lineups.sh`** so the [Hitter's Life](#hitters-life-board) lineup filter uses Rotowire **Today's Lineup** (official) instead of default vs RHP/LHP. For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`. Frozen snapshots live in sibling folders and on GitHub tags **`v1`**, **`v2`**, **`v3`**.
+> **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder, PP/Underdog fantasy boards, **Hitter's Life**, **Best 5s**). **Batter Score v3** (xwOBA + wRC+ form) sits beside v1/v2 — v1/v2 math unchanged. Batter boards now show **AVG vs R/L** (L5 · L10) and opposing **SP BAA** (vs R · vs L). Career **H2H overrides** live in git-tracked [`data/reference/h2h_career_overrides.csv`](data/reference/h2h_career_overrides.csv) (import via [`scripts/import_h2h_career_overrides.py`](scripts/import_h2h_career_overrides.py) — upsert only; never deletes other pairs). **Stuff K (v2)** needs a one-time **`./run_pitcher_strikeout_stuff.sh`**. Close to first pitch, run **`./run_official_lineups.sh`** for Rotowire **Today's Lineup** on Hitter's Life. Sibling **[`nfl-prop-model/`](nfl-prop-model/)** has its own V1/V2 board + **Sleeper Picks**. For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`.
 
 ---
 
@@ -42,6 +42,25 @@ python scripts/fetch_statcast_history.py --season 2024
 
 That saves `statcast_2024-03-28_2024-09-29.parquet` (~full 2024 regular season). Restart Streamlit after download. One-time fetch; not part of the daily pipeline.
 
+### Career H2H overrides (ESPN / StatMuse)
+
+Statcast H2H is limited to shards on disk (~1–2 seasons). For **all-time** batter-vs-pitcher lines (e.g. ESPN Bat vs Pitch / StatMuse), use the git-tracked sidecar CSV — **not** processed Statcast:
+
+| Piece | Path |
+|-------|------|
+| Store | [`data/reference/h2h_career_overrides.csv`](data/reference/h2h_career_overrides.csv) |
+| Lookup / upsert | [`h2h_career_overrides.py`](h2h_career_overrides.py) |
+| Import script | [`scripts/import_h2h_career_overrides.py`](scripts/import_h2h_career_overrides.py) |
+
+**Lookup order on boards:** override CSV → Statcast H2H. When an override is active, **Vs pitcher** shows ``· career``.
+
+**Safe merge:** importing a paste **adds** new (batter, pitcher) pairs and **updates** matching pairs only — unrelated rows are **kept**. The CLI prints `kept · updated · added`.
+
+```bash
+# Pipe markdown table, Word .docx, or .docx saved as .txt
+.venv/bin/python scripts/import_h2h_career_overrides.py path/to/h2h_paste.txt
+```
+
 ---
 
 ## Quick start for beginners
@@ -66,7 +85,7 @@ The pipeline does four things:
 | **V1** | Rolling form only (simple baseline) |
 | **V2** | + opponent, handedness, park |
 | **V3** | + Phases 1–6 (historical odds, multi-book, calibration, Batter Score, Pick Builder) — frozen at git tag **`v3`** |
-| **Main** | Today’s active code in this folder — same **LightGBM prop models** as V3 plus post-v3 upgrades: dual-head pitcher K/walks/outs, Track 1 K/walks/outs learning, **Stuff K (v2)**, **validated** Batter Score + **Batter Score v2** (Savant pitch-type matchup) + **Batter Score v3** (xwOBA / wRC+ form — display layer only; v1/v2 math unchanged), **Hitter's Life** batting board (**xwOBA**, **wRC+**, PP/UD fantasy lines), **official Rotowire lineups** (`./run_official_lineups.sh`), **Batter Score Pick Builder**, PrizePicks/Underdog fantasy on batter score boards, hot batters Statcast columns, main-board default column trim (Book / Calibrated / Devigged / Best Book / Line Δ hidden until toggled), Rotowire lineup filter, Top Over/Under **Game & time** + L5/L10 %, player stat **H2H** filter, bat/throw **(L)/(R)** labels |
+| **Main** | Today’s active code in this folder — same **LightGBM prop models** as V3 plus post-v3 upgrades: dual-head pitcher K/walks/outs, Track 1 K/walks/outs learning, **Stuff K (v2)**, **validated** Batter Score + **Batter Score v2** (Savant pitch-type matchup) + **Batter Score v3** (xwOBA / wRC+ form — display layer only; v1/v2 math unchanged), **Hitter's Life** batting board (**xwOBA**, **wRC+**, **AVG vs R/L**, **SP BAA**, PP/UD fantasy lines), **Best 5s** (perfect L5 props + PP fantasy), **career H2H overrides** (`data/reference/h2h_career_overrides.csv`), **official Rotowire lineups** (`./run_official_lineups.sh`), **Batter Score Pick Builder**, PrizePicks/Underdog fantasy on batter score boards, hot batters Statcast columns, main-board default column trim, Rotowire lineup filter, Top Over/Under **Game & time** + L5/L10 %, player stat **H2H** filter, bat/throw **(L)/(R)** labels; sibling **[`nfl-prop-model/`](nfl-prop-model/)** V1/V2 + Sleeper Picks |
 
 **Version compare** puts all four generations side-by-side on one table so you can see how **Over %** and **Under %** differ for the same player and market.
 
@@ -680,7 +699,7 @@ cp ../mlb-prop-model-v3/data/predictions/predictions_v2.csv \
 | **Git tag** | `v1` | `v2` | `v3` | — (branch **`main`** on [MON3Y](https://github.com/EZ94PHEN0M52/MON3Y)) |
 | **Player features** | Rolling L3/L5/L10/L20/season | + opponent, handedness, park | + game lines, stolen bases | Same as V3 |
 | **Odds pipeline** | Live props only | Live props only | Phases 1–6 (history, multi-book, movement, calibration) | Same as V3 |
-| **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 + fantasy-line batter score boards, **Hitter's Life** (**xwOBA**, **wRC+**, PP/UD fantasy), **Batter Score v2** + **v3**, **Stuff K (v2)**, hot batters Statcast columns, main-board default hidden columns, **official Rotowire lineups** script, **Batter Score Pick Builder**, ranking-table Game & time, conditional cell highlights, H2H stat history, Rotowire lineup filter |
+| **UI** | Basic board | Basic board | Batter Score, board filters, Pick Builder, L5/L10 % | Same as V3 + fantasy-line batter score boards, **Hitter's Life** (**xwOBA**, **wRC+**, **AVG vs R/L**, **SP BAA**, PP/UD fantasy), **Best 5s**, **career H2H overrides**, **Batter Score v2** + **v3**, **Stuff K (v2)**, hot batters Statcast columns, main-board default hidden columns, **official Rotowire lineups** script, **Batter Score Pick Builder**, ranking-table Game & time, conditional cell highlights, H2H stat history, Rotowire lineup filter |
 | **Models** | `models/*.pkl` | `models/v1/`, `models/v2/` | `models/v2/` + calibrators + dist | Same as V3 |
 | **Predictions** | `predictions.csv` | `predictions_v2.csv` | `predictions_v2.csv` + `_best.csv` | Same as V3 |
 | **Default CLI** | N/A | `--version v2` | `--version v2` | `--version v2` |
@@ -764,6 +783,7 @@ All inference, UI, and backtest paths read **local parquets and CSVs** first. Li
 |-----------|----------|
 | **`data/raw/`** | Statcast pitch-level (`statcast_{start}_{end}.parquet`), historical odds partitions (`odds/historical/date=…/`), intraday prop snapshots (`odds/snapshots/`) |
 | **`data/processed/`** | Batter/pitcher feature parquets, `current_props.parquet`, `current_game_lines.parquet`, `daily_probables.parquet`, `prizepicks_fantasy_lines.parquet`, `underdog_fantasy_lines.parquet`, `rotowire_lineups.parquet` (default RHP/LHP on first Hitter's Life use; **OFFICIAL** rows from [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game)) |
+| **`data/reference/`** | Git-tracked reference tables (not regenerated by `./run_daily.sh`) — e.g. [`h2h_career_overrides.csv`](data/reference/h2h_career_overrides.csv) for all-time H2H ([Career H2H overrides](#career-h2h-overrides-espn--statmuse)) |
 | **`data/predictions/`** | `predictions_v2.csv`, `predictions_v2_best.csv` (written by `predict.py`; read by Streamlit) |
 | **`data/backtest/`** | Backtest CSVs and `batter_score_validation.json` |
 
@@ -1122,9 +1142,10 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 
 - **[Main board](#main-board-apppy--uiboardpy)** — sortable **Batter Score** column with labels **Full** / **Partial** / **Partial · SP TBD** / **Form only** (glossary tooltip); player names show **(L)/(R)** bat/throw hand when known
 - **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter). Columns: Player, **Game & time**, Opposing SP **(L)/(R)**, Vs pitcher, **PP fantasy**, **UD fantasy**, **L5 / L10 %** (vs PP line), **Batter score**, **Batter score v2**, **Batter score v3**. **Conditional highlights:** orange **UD fantasy** when Underdog line &lt; PrizePicks; sky blue when PP = UD; light green **Vs pitcher** when H2H AVG &gt; .300; yellow/green **L5 / L10 %** when L5 ≥ 80% with L10 below/above 80%; red row outline when UD lower + L5/L10 green
-- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** (Hitter's Life) — **all** slate batters with Top 10 PP/UD/L5-L10/Vs pitcher columns and highlights, plus **Arsenal wOBA**, **Batting average** (Szn / L5 / L10), **TB per game (L5)**, and **Batter score v3**; **Game** selectbox above the table filters to one matchup (no **Game & time** column); **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
-- **[Main board → Hot batters — batter score](#main-board-apppy--uiboardpy)** — top **20** Batter Scores among hitters in the top **15** L5 batting averages **and** a Hitter's Life batting-AVG highlight (green / orange / yellow); includes **Arsenal wOBA**, **xwOBA**, **wRC+**, **Batting average**, **TB per game (L5)**, PP/UD/L5-L10/Vs pitcher, and **Batter score v3** (no **Game & time** column); tie-break favors blue TB soarer then AVG color ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
-- **[Hitter's Life](#hitters-life-board)** (`?view=hitters_life`) — batting-context board: Vs SP (name + H2H), **Arsenal wOBA**, **Batting average**, **xwOBA** (L5 · L10), **wRC+** (L30 · L10), pitch-type wOBA selector, **PP fantasy** / **UD fantasy**, **Batter score v3**, TB game log; Rotowire lineup filter (**Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has run, else default vs SP hand)
+- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** (Hitter's Life) — **all** slate batters with Top 10 PP/UD/L5-L10/Vs pitcher columns and highlights, plus **Arsenal wOBA**, **Batting average** (Szn / L5 / L10), **AVG vs R / AVG vs L** (L5 · L10), **SP BAA** (vs R · vs L), **TB per game (L5)**, and **Batter score v3**; **Game** selectbox above the table filters to one matchup (no **Game & time** column); **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
+- **[Main board → Hot batters — batter score](#main-board-apppy--uiboardpy)** — top **20** Batter Scores among hitters in the top **15** L5 batting averages **and** a Hitter's Life batting-AVG highlight (green / orange / yellow); includes **Arsenal wOBA**, **xwOBA**, **wRC+**, **Batting average**, **AVG vs R/L**, **SP BAA**, **TB per game (L5)**, PP/UD/L5-L10/Vs pitcher, and **Batter score v3** (no **Game & time** column); tie-break favors blue TB soarer then AVG color ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
+- **[Hitter's Life](#hitters-life-board)** (`?view=hitters_life`) — batting-context board: Vs SP (name + H2H, ``· career`` when override active), **Arsenal wOBA**, **Batting average**, **AVG vs R/L**, **SP BAA**, **xwOBA** (L5 · L10), **wRC+** (L30 · L10), pitch-type wOBA selector, **PP fantasy** / **UD fantasy**, **Batter score v3**, TB game log; Rotowire lineup filter (**Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has run, else default vs SP hand)
+- **[Best 5s](#best-5s-board)** (`?view=best_fives`) — perfect L5 prop overs + perfect L5 PrizePicks fantasy hitters (full 5-game sample, strictly over)
 - **[Player page](#player-pages-uplayerpy)** — component breakdown (season baseline, recent form, matchup, pitcher form), SP ERA L5 + H2H detail, H+TB+BB last-10 Altair chart; opposing SP name shows throw hand **(L)/(R)** when known
 - **[Stat history](#player-pages-uplayerpy)** — market dropdown (all batter/pitcher prop markets), **All / H2H** scope toggle (H2H = games vs today's slate opponent), **L5 / L10** window toggle, rolling averages, per-game Altair bar chart ([`ui/player_stats.py`](ui/player_stats.py))
 
@@ -1739,7 +1760,7 @@ All markets below are fetched from The Odds API (`odds_api.py` `PROP_MARKETS`), 
 
 ## Streamlit UI
 
-Launch with `streamlit run app.py` or [`./run_daily.sh --streamlit`](#daily-workflow-v2). Routing uses query params: `?player=Name` for player pages, `?view=top_over` / `?view=top_under` for full ranked lists, `?view=hitters_life` for the [Hitter's Life board](#hitters-life-board), `?view=sleeper_picks` for [Sleeper Picks](#sleeper-picks-board), `?view=compare` for version compare.
+Launch with `streamlit run app.py` or [`./run_daily.sh --streamlit`](#daily-workflow-v2). Routing uses query params: `?player=Name` for player pages, `?view=top_over` / `?view=top_under` for full ranked lists, `?view=hitters_life` for the [Hitter's Life board](#hitters-life-board), `?view=best_fives` for [Best 5s](#best-5s-board), `?view=sleeper_picks` for [Sleeper Picks](#sleeper-picks-board), `?view=compare` for version compare.
 
 ### Pick Builder (`ui/pick_builder.py`)
 
@@ -1756,11 +1777,19 @@ Session favorites slip (Pickfinder-style, **no export**). Picks live in `st.sess
 
 Dedicated batting-context page at **`?view=hitters_life`** (link **Hitter's Life** on the main board next to Top Over / Top Under). Code: [`ui/hitters_life_page.py`](ui/hitters_life_page.py), [`ui/hitters_life_board.py`](ui/hitters_life_board.py), [`hitters_life_data.py`](hitters_life_data.py).
 
-- **Columns:** Player, **Game & time**, **Vs pitcher** (SP name + H2H hits/AB or SP ERA L5), **Arsenal wOBA** (usage-weighted vs SP mix), **Batting average** (Szn / L5 / L10), **xwOBA** (L5 · L10), **wRC+** (L30 · L10), **wOBA vs {pitch type}** (selectbox: Fastball, Slider, …), **PP fantasy** / **UD fantasy**, **Batter score v3**, **TB per game** (last 5 games, space-separated)
+- **Columns:** Player, **Game & time**, **Vs pitcher** (SP name + H2H hits/AB or SP ERA L5; ``· career`` when [career H2H override](#career-h2h-overrides-espn--statmuse) applies), **Arsenal wOBA** (usage-weighted vs SP mix), **Batting average** (Szn / L5 / L10), **AVG vs R** / **AVG vs L** (L5 · L10 from Statcast `p_throws`), **SP BAA** (opposing SP season BAA vs R · vs L from batter `stand`), **xwOBA** (L5 · L10), **wRC+** (L30 · L10), **wOBA vs {pitch type}** (selectbox: Fastball, Slider, …), **PP fantasy** / **UD fantasy**, **Batter score v3**, **TB per game** (last 5 games, space-separated)
 - **Highlights:** light green when season AVG &gt; .300 or H2H AVG &gt; .300; light green TB log when every game is non-zero ([`ui/hitters_life_highlights.py`](ui/hitters_life_highlights.py))
 - **Game filter:** same pattern as batter score by game
 - **Lineup filter** (when one game selected): prefers Rotowire **Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has cached **OFFICIAL** rows; otherwise **default vs opposing SP hand** ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) → `data/processed/rotowire_lineups.parquet`); orders batters 1–9 per team
 - Respects **Market type** filter only (not Edge / EV)
+
+### Best 5s board
+
+Dedicated page at **`?view=best_fives`** (link **Best 5s** on the main board). Code: [`ui/best_fives_page.py`](ui/best_fives_page.py), [`ui/best_fives_board.py`](ui/best_fives_board.py), helpers in [`ui/player_stats.py`](ui/player_stats.py).
+
+- **Perfect L5 props** — slate props where the player cleared the posted line in **each** of the last 5 completed games (strictly over; requires a full 5-game sample)
+- **Perfect L5 PP fantasy** — batters who cleared their PrizePicks hitter fantasy line in each of the last 5 games (same sample rule)
+- Respects **Market type** filter on the props board; display-only (no change to Model % / Edge / EV)
 
 ### Sleeper Picks board
 
@@ -1787,10 +1816,10 @@ The board always shows **one row per (player, market)** — the book with the hi
 - **Column header sort buttons:** click a header to sort (up to **3 columns** — first click descending, second click ascending, third click removes; subscript ₁₂₃ shows sort priority). **Clear sort** resets to EV descending. Headers also show filter subscripts when a column filter is active
 - **AND logic:** Market type, min Edge, min EV, and every column filter combine with **AND** — a row must pass all active filters
 - **Summary metrics:** Prop count, best edge, best EV, unique players (reflect Market / Edge / EV filters)
-- **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); columns include **Player** (link, **(L)/(R)** hand when known), **Game & time**, market, book, line, side, Over/Under %, **L5 / L10 %**, Edge; links to full lists, **[Hitter's Life](#hitters-life-board)**, **[Sleeper Picks](#sleeper-picks-board)**, and **[Version compare](#version-compare-v1--v2--v3--main)**
+- **Top Over / Top Under previews:** Top 10 by model Over % / Under % (same Market / Edge / EV filters as the board); columns include **Player** (link, **(L)/(R)** hand when known), **Game & time**, market, book, line, side, Over/Under %, **L5 / L10 %**, Edge; links to full lists, **[Hitter's Life](#hitters-life-board)**, **[Best 5s](#best-5s-board)**, **[Sleeper Picks](#sleeper-picks-board)**, and **[Version compare](#version-compare-v1--v2--v3--main)**
 - **Top 10 batter score** — highest Batter Score among batters on the slate (best row per player; respects Market type filter; independent of Edge / EV filters). See [Batter Score → UI surfaces](#batter-score) for PP/UD fantasy columns, **Batter score v2/v3**, and conditional cell highlights
-- **Batter score by game** (Hitter's Life) — all slate batters with Top 10 fantasy/score columns plus **Arsenal wOBA**, **Batting average**, **TB per game (L5)**, and **Batter score v3** (Hitter's Life color rules); **Game** selectbox filters to one matchup; **Batter Score Pick Builder** add controls
-- **Hot batters — batter score** — top **20** batter scores among elite L5 AVG hitters with **Arsenal wOBA**, **xwOBA**, **wRC+**, and batting-board highlights; **Top props by market** table sits above it ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
+- **Batter score by game** (Hitter's Life) — all slate batters with Top 10 fantasy/score columns plus **Arsenal wOBA**, **Batting average**, **AVG vs R/L**, **SP BAA**, **TB per game (L5)**, and **Batter score v3** (Hitter's Life color rules); **Game** selectbox filters to one matchup; **Batter Score Pick Builder** add controls
+- **Hot batters — batter score** — top **20** batter scores among elite L5 AVG hitters with **Arsenal wOBA**, **xwOBA**, **wRC+**, **AVG vs R/L**, **SP BAA**, and batting-board highlights; **Top props by market** table sits above it ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
 - **Columns:** Player (link, **(L)/(R)** when known), game, market, book, side, line, odds, Over %, Under %, Model %, Market %, Devigged %, L5 / L10 %, **[Batter Score](#batter-score)** (Full / Partial · SP TBD / Partial / Form only), **Pred #** and **Dist Over %** on pitcher K/walks/outs (dual-head), **Stuff K (v2)** on pitcher strikeouts only (Statcast stuff model — separate from Model % / Edge), Edge %, Consensus Edge %, Best Book, Best EV %, EV %, Line Δ, Steam
 - **L5 / L10 %:** Share of the player's last 5 / 10 completed games where the stat strictly exceeded the posted line (from feature parquets via [`ui/player_stats.py`](ui/player_stats.py))
 
@@ -2666,6 +2695,35 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 ---
 
 ## Changelog
+
+### 2026-09-19 — Best 5s, hand-split AVG / SP BAA, career H2H overrides, NFL Sleeper
+
+**Context:** Surface platoon form and all-time H2H without changing prop-model math; add a perfect-L5 research page; ship NFL Sleeper Picks in the sibling folder.
+
+**Added — Best 5s board:**
+- [`ui/best_fives_page.py`](ui/best_fives_page.py) / [`ui/best_fives_board.py`](ui/best_fives_board.py) — **`?view=best_fives`**: perfect L5 prop overs + perfect L5 PrizePicks fantasy hitters (strictly over; full 5-game sample)
+- [`ui/player_stats.py`](ui/player_stats.py) — `is_perfect_l5_prop` / `is_perfect_l5_pp_fantasy`
+- Main-board link + glossary `best_fives_page`
+
+**Added — AVG vs R/L + SP BAA (display-only):**
+- [`hitters_life_data.py`](hitters_life_data.py) — Statcast hand splits (`p_throws` / `stand`) as **AVG vs R** / **AVG vs L** (L5 · L10) and opposing **SP BAA** (vs R · vs L)
+- Columns on Batter Score boards, Hitter's Life, and hot batters ([`ui/batter_score_board.py`](ui/batter_score_board.py), [`ui/hitters_life_board.py`](ui/hitters_life_board.py), [`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
+
+**Added — career H2H override store:**
+- [`data/reference/h2h_career_overrides.csv`](data/reference/h2h_career_overrides.csv) — git-tracked sidecar (ESPN/StatMuse all-time lines)
+- [`h2h_career_overrides.py`](h2h_career_overrides.py) — lookup + upsert (keyed by normalized batter+pitcher); **keeps** unrelated rows
+- [`scripts/import_h2h_career_overrides.py`](scripts/import_h2h_career_overrides.py) — parse pipe tables / Word `.docx` (incl. `.docx` saved as `.txt`) → upsert; prints `kept · updated · added`
+- Boards prefer override over Statcast H2H; cells show ``· career``
+- Tests: [`scripts/test_h2h_career_overrides.py`](scripts/test_h2h_career_overrides.py)
+
+**Also — Batter Score gating:** softens minimum recent games toward 5 with **Low sample** labeling ([`batter_score.py`](batter_score.py) / [`batter_score_data.py`](batter_score_data.py)). Opportunity helpers live in [`batter_opportunity.py`](batter_opportunity.py) (order/volume; not shown as board columns).
+
+**NFL sibling ([`nfl-prop-model/`](nfl-prop-model/)):**
+- Sleeper Picks fetch (`fetch_sleeper_props.py`) + Streamlit page; see [`nfl-prop-model/README.md`](nfl-prop-model/README.md)
+
+**Board impact:** Display / research layers only. Main prop **Model %**, **Edge**, and **EV** unchanged.
+
+---
 
 ### 2026-09-03 — Batter Score v3, xwOBA / wRC+ boards, main-board column defaults
 

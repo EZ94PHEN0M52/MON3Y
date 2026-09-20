@@ -947,7 +947,9 @@ def build_batter_inputs_from_rows(
     if not required.issubset(player_rows.columns):
         return None
 
-    if len(player_rows) < 10:
+    from batter_score import MIN_GAMES_BATTER_SCORE
+
+    if len(player_rows) < MIN_GAMES_BATTER_SCORE:
         return None
 
     raw_points = player_rows.apply(_raw_points_row, axis=1)
@@ -978,6 +980,7 @@ def build_batter_inputs_from_rows(
     h2h_avg_raw_points = None
     h2h_hits = None
     h2h_ab = None
+    h2h_manual_override = False
     team_proxy = None
     opponent_arsenal = []
     opponent_arsenal_v2 = []
@@ -1000,11 +1003,26 @@ def build_batter_inputs_from_rows(
                 sp_name,
                 version=version,
             )
-            if sp_id is not None:
+
+            from h2h_career_overrides import lookup_career_h2h
+
+            override = lookup_career_h2h(display_name or "", sp_name)
+            if override is not None:
+                h2h_pa = override.pa
+                h2h_hits = override.hits
+                h2h_ab = override.ab
+                h2h_avg_raw_points = estimate_h2h_avg_raw_points_from_hits_ab(
+                    override.hits,
+                    override.ab,
+                )
+                h2h_manual_override = True
+            elif sp_id is not None and batter_id is not None:
                 h2h_pa, h2h_avg_raw_points, h2h_hits, h2h_ab = _compute_h2h_stats(
                     batter_id,
                     sp_id,
                 )
+
+            if sp_id is not None and batter_id is not None:
                 statcast_latest = _load_latest_statcast(
                     _statcast_cache_key()
                 )
@@ -1046,6 +1064,7 @@ def build_batter_inputs_from_rows(
         h2h_avg_raw_points=h2h_avg_raw_points,
         h2h_hits=h2h_hits,
         h2h_ab=h2h_ab,
+        h2h_manual_override=h2h_manual_override,
         team_opp_earned_runs_proxy=team_proxy,
         season_xwoba=statcast_windows.get("season_xwoba"),
         l5_xwoba=statcast_windows.get("l5_xwoba"),
@@ -1281,8 +1300,11 @@ def _score_cache_key(
     player_name: str,
     game_context: Optional[dict],
 ) -> str:
+    from h2h_career_overrides import overrides_cache_key
+
+    override_stamp = str(overrides_cache_key()[1])
     if not game_context:
-        return _player_key(player_name)
+        return f"{_player_key(player_name)}|{override_stamp}"
 
     return "|".join(
         [
@@ -1290,6 +1312,7 @@ def _score_cache_key(
             str(game_context.get("game_date", "")),
             str(game_context.get("home_team", "")).lower(),
             str(game_context.get("away_team", "")).lower(),
+            override_stamp,
         ]
     )
 
@@ -1322,8 +1345,9 @@ def lookup_h2h_board_stats(
     """
     Career H2H (pa, hits, ab) for the board vs-pitcher column.
 
-    Uses merged statcast shards so prior-season matchups are included.
-    Scoring still reads only the latest statcast file via build_batter_inputs().
+    Prefers ``data/reference/h2h_career_overrides.csv`` when a batter/SP pair
+    is listed (all-time ESPN/StatMuse lines). Otherwise uses merged Statcast
+    shards (typically ~1–2 seasons).
     """
     player_rows = _batter_rows(player_name, version=version)
     if player_rows is None or player_rows.empty or not game_context:
@@ -1335,8 +1359,16 @@ def lookup_h2h_board_stats(
     if batter_id is None or not isinstance(batter_team, str) or not batter_team.strip():
         return None, None, None
 
-    _, sp_id = _lookup_opposing_sp_for_context(game_context, batter_team)
+    sp_name, sp_id = _lookup_opposing_sp_for_context(game_context, batter_team)
     sp_id = coerce_mlb_id(sp_id)
+
+    if sp_name:
+        from h2h_career_overrides import lookup_career_h2h
+
+        override = lookup_career_h2h(player_name, sp_name)
+        if override is not None:
+            return override.pa, override.hits, override.ab
+
     if sp_id is None:
         return None, None, None
 

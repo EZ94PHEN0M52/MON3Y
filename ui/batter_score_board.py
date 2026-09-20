@@ -14,6 +14,8 @@ from batter_score_data import (
 )
 from hitters_life_data import (
     format_batting_average_column,
+    format_batting_average_vs_hand_column,
+    format_opposing_sp_baa_column,
     format_pitch_woba,
     format_total_bases_game_log,
     lookup_arsenal_weighted_woba,
@@ -60,6 +62,9 @@ BATTER_SCORE_BY_GAME_DISPLAY_COLUMNS = [
     "vs_pitcher",
     "arsenal_woba",
     "batting_average",
+    "avg_vs_rhp",
+    "avg_vs_lhp",
+    "sp_baa",
     "pp_fantasy_line",
     "ud_fantasy_line",
     "l5_l10_pct",
@@ -234,6 +239,7 @@ def _format_vs_pitcher(
     h2h_pa: int | None = None,
     h2h_hits: int | None = None,
     h2h_ab: int | None = None,
+    player_name: str | None = None,
 ) -> str:
     """Career AVG vs opposing SP when PA threshold met; else SP ERA L5 if known."""
     if result is None:
@@ -246,7 +252,13 @@ def _format_vs_pitcher(
     if pa is not None and pa >= MIN_PA_H2H_BOARD:
         if ab is not None and ab > 0:
             hit_count = hits if hits is not None else 0
-            return _format_batting_avg(hit_count, ab)
+            text = _format_batting_avg(hit_count, ab)
+            if player_name and result.opposing_sp_name:
+                from h2h_career_overrides import lookup_career_h2h
+
+                if lookup_career_h2h(player_name, result.opposing_sp_name):
+                    return f"{text} · career"
+            return text
 
     if result.opposing_sp_era_l5 is not None:
         return f"SP ERA L5 {result.opposing_sp_era_l5:.2f}"
@@ -326,6 +338,7 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
         h2h_pa=h2h_pa,
         h2h_hits=h2h_hits,
         h2h_ab=h2h_ab,
+        player_name=row["player"],
     )
 
     built = {
@@ -336,6 +349,21 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
         ),
         "opposing_sp": opposing,
         "vs_pitcher": vs_pitcher,
+        "avg_vs_rhp": format_batting_average_vs_hand_column(
+            row["player"],
+            version,
+            hand="R",
+        ),
+        "avg_vs_lhp": format_batting_average_vs_hand_column(
+            row["player"],
+            version,
+            hand="L",
+        ),
+        "sp_baa": format_opposing_sp_baa_column(
+            row["player"],
+            version,
+            game_context,
+        ),
         "pp_fantasy_line": format_prizepicks_fantasy_line(row["player"]),
         "ud_fantasy_line": format_underdog_fantasy_line(row["player"]),
         "l5_l10_pct": l5_l10,
@@ -425,9 +453,27 @@ def render_top_batter_scores(
     )
 
 
+def _hand_split_avg_column_config() -> dict:
+    return {
+        "avg_vs_rhp": st.column_config.TextColumn(
+            "AVG vs R",
+            help=GLOSSARY["avg_vs_rhp"],
+        ),
+        "avg_vs_lhp": st.column_config.TextColumn(
+            "AVG vs L",
+            help=GLOSSARY["avg_vs_lhp"],
+        ),
+        "sp_baa": st.column_config.TextColumn(
+            "SP BAA",
+            help=GLOSSARY["sp_baa"],
+        ),
+    }
+
+
 def _batter_score_by_game_column_config():
     config = _batter_score_table_column_config()
     config.pop("game_time", None)
+    config.update(_hand_split_avg_column_config())
     config["arsenal_woba"] = st.column_config.TextColumn(
         "Arsenal wOBA",
         help=(
@@ -461,7 +507,7 @@ def _batter_score_by_game_column_config():
 
 
 def _batter_score_table_column_config():
-    return {
+    config = {
         "player_link": st.column_config.LinkColumn(
             "Player",
             help=(
@@ -484,6 +530,9 @@ def _batter_score_table_column_config():
                 "Career batting average vs the listed opposing starter "
                 f"(hits/AB) when PA ≥ {MIN_PA_H2H_BOARD}; otherwise SP ERA "
                 "over the pitcher's last five starts. "
+                "Prefers all-time overrides from "
+                "`data/reference/h2h_career_overrides.csv` when present "
+                "(shown with ``· career``). "
                 "Light green when H2H average is above .300."
             ),
         ),
@@ -516,6 +565,8 @@ def _batter_score_table_column_config():
             help=GLOSSARY["batter_score_v3"],
         ),
     }
+    config.update(_hand_split_avg_column_config())
+    return config
 
 
 def _prepare_batter_score_slate(

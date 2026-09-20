@@ -22,6 +22,11 @@ nothing is hardcoded in the scoring functions themselves.
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+# Minimum games to build BatterInputs / score at all.
+MIN_GAMES_BATTER_SCORE = 5
+# Full L5+L10 form blend; below this we still score but label "Low sample".
+MIN_GAMES_FULL_FORM = 10
+
 # Minimum PA vs a specific SP before H2H stats are blended (Phase B).
 MIN_PA_H2H = 10
 
@@ -255,6 +260,7 @@ def partial_score_label(
     *,
     sp_tbd: bool = False,
     team_proxy: bool = False,
+    low_sample: bool = False,
 ) -> Optional[str]:
     """Human-readable label when some components are gated off."""
     gate_map = gates.as_dict()
@@ -262,25 +268,25 @@ def partial_score_label(
     inactive = [key for key, enabled in gate_map.items() if not enabled]
 
     if not inactive:
-        return "Full"
+        label = "Full"
+    elif sp_tbd and active == ["season_baseline", "recent_form"]:
+        label = "Partial · SP TBD"
+    elif team_proxy and "pitcher_form" in active:
+        label = "Partial · SP TBD (team proxy)"
+    elif active == ["season_baseline", "recent_form"]:
+        label = "Form only"
+    elif inactive == ["matchup_grade", "pitcher_form"]:
+        label = "Form only"
+    elif inactive == ["matchup_grade"]:
+        label = "Partial"
+    else:
+        label = "Partial"
 
-    if sp_tbd and active == ["season_baseline", "recent_form"]:
-        return "Partial · SP TBD"
-
-    if team_proxy and "pitcher_form" in active:
-        return "Partial · SP TBD (team proxy)"
-
-    if active == ["season_baseline", "recent_form"]:
-        return "Form only"
-
-    if inactive == ["matchup_grade", "pitcher_form"]:
-        return "Form only"
-
-    if inactive == ["matchup_grade"]:
-        return "Partial"
-
-    return "Partial"
-
+    if low_sample:
+        if label == "Full":
+            return "Low sample"
+        return f"{label} · Low sample"
+    return label
 
 # ---------------------------------------------------------------------------
 # Data inputs
@@ -353,12 +359,16 @@ def recent_form_index(
     rf_weights: RecentFormWeights,
 ) -> float:
     games = batter.game_log
-    if len(games) < 10:
+    if len(games) < MIN_GAMES_BATTER_SCORE:
         raise ValueError(
-            "Need at least 10 games in game_log for an L5/L10 blend"
+            f"Need at least {MIN_GAMES_BATTER_SCORE} games in game_log "
+            "for an L5/L10 blend"
         )
-    l5 = sum(g.raw_points for g in games[:5]) / 5
-    l10 = sum(g.raw_points for g in games[:10]) / 10
+    # Platoon / sparse starters: use whatever window is available (cap at 5/10).
+    n5 = min(5, len(games))
+    n10 = min(10, len(games))
+    l5 = sum(g.raw_points for g in games[:n5]) / n5
+    l10 = sum(g.raw_points for g in games[:n10]) / n10
     blended = rf_weights.l5 * l5 + rf_weights.l10 * l10
     return min(
         100.0,
@@ -821,13 +831,17 @@ def _compute_with_gates(
     )
 
     is_partial = len(gated_off) > 0
+    low_sample = len(batter.game_log) < MIN_GAMES_FULL_FORM
     label = partial_score_label(
         gates,
         sp_tbd=sp_tbd,
         team_proxy=team_proxy,
+        low_sample=low_sample,
     )
     if not is_partial and label is None:
         label = "Full"
+    if low_sample:
+        is_partial = True
 
     return BatterScoreResult(
         batter_name=batter.name,
@@ -894,11 +908,13 @@ def partial_score_label_v3(
     sp_tbd: bool = False,
     team_proxy: bool = False,
     counting_fallback: bool = False,
+    low_sample: bool = False,
 ) -> Optional[str]:
     label = partial_score_label(
         gates,
         sp_tbd=sp_tbd,
         team_proxy=team_proxy,
+        low_sample=low_sample,
     )
     if counting_fallback:
         suffix = " · counting fallback"
@@ -974,14 +990,18 @@ def _compute_with_gates_v3(
     )
 
     is_partial = len(gated_off) > 0 or counting_fallback
+    low_sample = len(batter.game_log) < MIN_GAMES_FULL_FORM
     label = partial_score_label_v3(
         gates,
         sp_tbd=sp_tbd,
         team_proxy=team_proxy,
         counting_fallback=counting_fallback,
+        low_sample=low_sample,
     )
     if not is_partial and label is None:
         label = "Full"
+    if low_sample:
+        is_partial = True
 
     return BatterScoreResult(
         batter_name=batter.name,

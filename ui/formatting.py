@@ -182,6 +182,12 @@ def hitters_life_path():
     return "/?" + urlencode({"view": "hitters_life"})
 
 
+def best_fives_path():
+    from urllib.parse import urlencode
+
+    return "/?" + urlencode({"view": "best_fives"})
+
+
 def sleeper_picks_path():
     from urllib.parse import urlencode
 

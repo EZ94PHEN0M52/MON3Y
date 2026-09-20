@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -126,6 +127,28 @@ def current_props_path() -> Path:
 def current_injuries_path() -> Path:
     """Latest injury + roster status snapshot for board / predict gates."""
     return PROCESSED_DIR / "current_injuries.parquet"
+
+
+def sleeper_props_path() -> Path:
+    return PROCESSED_DIR / "sleeper_props.parquet"
+
+
+def parse_commence_datetime(commence_time):
+    """Parse ISO strings or Unix epoch seconds/ms to a UTC pandas Timestamp."""
+    if commence_time is None or (isinstance(commence_time, float) and pd.isna(commence_time)):
+        return None
+    if isinstance(commence_time, (int, float, np.integer, np.floating)):
+        value = float(commence_time)
+        if value <= 0:
+            return None
+        if value >= 1e11:
+            return pd.to_datetime(value, unit="ms", utc=True)
+        if value >= 1e9:
+            return pd.to_datetime(value, unit="s", utc=True)
+    try:
+        return pd.to_datetime(commence_time, utc=True)
+    except (TypeError, ValueError):
+        return None
 
 
 def nfl_slate_now(when: datetime | None = None) -> datetime:

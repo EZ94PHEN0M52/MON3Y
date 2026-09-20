@@ -8,6 +8,8 @@ import streamlit as st
 from batter_score_data import build_game_context
 from hitters_life_data import (
     format_batting_average_column,
+    format_batting_average_vs_hand_column,
+    format_opposing_sp_baa_column,
     format_pitch_woba,
     format_total_bases_game_log,
     format_wrc_plus_column,
@@ -18,6 +20,7 @@ from hitters_life_data import (
 from ui.batter_score_board import (
     _batter_score_table_column_config,
     _build_batter_score_row,
+    _hand_split_avg_column_config,
     _prepare_batter_score_slate,
     style_batter_score_board,
 )
@@ -53,6 +56,9 @@ HOT_BATTER_SCORE_COLUMNS = [
     "vs_pitcher",
     "arsenal_woba",
     "batting_average",
+    "avg_vs_rhp",
+    "avg_vs_lhp",
+    "sp_baa",
     "xwoba",
     "wrc_plus",
     "pp_fantasy_line",
@@ -210,6 +216,21 @@ def build_hot_batter_score_df(
             lookup_arsenal_weighted_woba(player, version, game_context),
         )
         built["batting_average"] = batting_average
+        built["avg_vs_rhp"] = format_batting_average_vs_hand_column(
+            player,
+            version,
+            hand="R",
+        )
+        built["avg_vs_lhp"] = format_batting_average_vs_hand_column(
+            player,
+            version,
+            hand="L",
+        )
+        built["sp_baa"] = format_opposing_sp_baa_column(
+            player,
+            version,
+            game_context,
+        )
         built["xwoba"] = format_xwoba_column(player, version)
         built["wrc_plus"] = format_wrc_plus_column(player, version)
         built["_batting_average"] = batting_average
@@ -228,6 +249,7 @@ def build_hot_batter_score_df(
 
 def _hot_batter_score_column_config():
     config = _batter_score_table_column_config()
+    config.update(_hand_split_avg_column_config())
     config["arsenal_woba"] = st.column_config.TextColumn(
         "Arsenal wOBA",
         help=(

@@ -6,6 +6,7 @@ import streamlit as st
 
 from odds_aggregation import dedupe_best_prop
 from ui.formatting import (
+    best_fives_path,
     compare_view_path,
     hitters_life_path,
     sleeper_picks_path,
@@ -1173,6 +1174,7 @@ def _render_probability_rankings(filtered, key_prefix, version="v2"):
     with link_row:
         st.markdown(f"**[Top Over %]({top_list_path('top_over')})**")
         st.markdown(f"**[Top Under %]({top_list_path('top_under')})**")
+        st.markdown(f"**[Best 5s]({best_fives_path()})**")
         st.markdown(f"**[Hitter's Life]({hitters_life_path()})**")
         st.markdown(f"**[Sleeper Picks]({sleeper_picks_path()})**")
         st.markdown(f"**[Version compare]({compare_view_path()})**")
