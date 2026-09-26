@@ -55,6 +55,8 @@ Flags:
   (none)               Full pipeline: ensure features → props → game lines →
                        probables → predict (v2). Evening run when props post.
   --streamlit          Open Streamlit board after predict (default port 8501).
+                       Also runs ``tailscale serve`` for phone/remote access
+                       when the Tailscale CLI is installed (best-effort).
   --port N             Streamlit port when using --streamlit.
   --include-today      Feature / Statcast / predict window through calendar
                        today (not just yesterday). Use after games finish and
@@ -210,7 +212,31 @@ python predict.py --start "$SEASON_START" --end "$FEATURE_END" --version v2
 echo ""
 echo "=== Pipeline complete ==="
 
+# Publish localhost Streamlit on the Tailscale tailnet (phone / away access).
+# Best-effort: missing CLI or Serve failure must not block the board.
+enable_tailscale_serve() {
+  local port="$1"
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo ">>> Tailscale CLI not found — skip remote Serve."
+    echo "    Install Tailscale (or open http://localhost:${port} on this Mac)."
+    echo "    See README → Remote access (Tailscale)."
+    return 0
+  fi
+
+  echo ">>> Tailscale Serve → http://127.0.0.1:${port} ..."
+  if tailscale serve --bg "http://127.0.0.1:${port}"; then
+    echo ">>> Tailscale Serve status:"
+    tailscale serve status 2>/dev/null || true
+    echo "    Phone/laptop (Tailscale on): use the https://…ts.net URL above,"
+    echo "    or http://\$(tailscale ip -4):${port}"
+  else
+    echo "WARNING: tailscale serve failed — board still opens on localhost."
+    echo "    Is Tailscale logged in? Try: tailscale status"
+  fi
+}
+
 if $RUN_STREAMLIT; then
+  enable_tailscale_serve "$STREAMLIT_PORT"
   echo ">>> Launching Streamlit at http://localhost:${STREAMLIT_PORT} ..."
   streamlit run app.py --server.port "$STREAMLIT_PORT"
 fi

@@ -509,34 +509,45 @@ def _h2h_hits_ab(events: pd.Series) -> Tuple[int, int]:
     return hits, ab
 
 
+def _h2h_home_runs(events: pd.Series) -> int:
+    """Career home runs vs one SP from Statcast terminal events."""
+    return int(events.eq("home_run").sum())
+
+
 def _compute_h2h_stats(
     batter_id: Optional[int],
     sp_id: Optional[int],
     *,
     statcast: Optional[pd.DataFrame] = None,
-) -> Tuple[Optional[int], Optional[float], Optional[int], Optional[int]]:
+) -> Tuple[
+    Optional[int],
+    Optional[float],
+    Optional[int],
+    Optional[int],
+    Optional[int],
+]:
     """
     Batter vs SP career H2H from Statcast raw.
 
-    Returns (pa_count, avg H+TB+BB per game vs that SP, hits, ab).
-    Scoring still omits H2H when PA < MIN_PA_H2H; hits/ab are for board display.
+    Returns (pa_count, avg H+TB+BB per game vs that SP, hits, ab, hr).
+    Scoring still omits H2H when PA < MIN_PA_H2H; hits/ab/hr are for board display.
     """
     if batter_id is None or sp_id is None:
-        return None, None, None, None
+        return None, None, None, None, None
 
     batter_id = coerce_mlb_id(batter_id)
     sp_id = coerce_mlb_id(sp_id)
     if batter_id is None or sp_id is None:
-        return None, None, None, None
+        return None, None, None, None, None
 
     if statcast is None:
         statcast = _load_latest_statcast(_statcast_cache_key())
     if statcast is None or statcast.empty:
-        return None, None, None, None
+        return None, None, None, None, None
 
     required = {"batter", "pitcher", "events", "game_date"}
     if not required.issubset(statcast.columns):
-        return None, None, None, None
+        return None, None, None, None, None
 
     matchups = statcast[
         statcast["batter"].astype(int).eq(batter_id)
@@ -545,10 +556,11 @@ def _compute_h2h_stats(
     ].copy()
 
     if matchups.empty:
-        return 0, None, 0, 0
+        return 0, None, 0, 0, 0
 
     pa_count = int(len(matchups))
     h2h_hits, h2h_ab = _h2h_hits_ab(matchups["events"])
+    h2h_hr = _h2h_home_runs(matchups["events"])
 
     game_stats = []
     for _, group in matchups.groupby("game_date", sort=False):
@@ -556,10 +568,10 @@ def _compute_h2h_stats(
         game_stats.append(raw_points)
 
     if not game_stats:
-        return pa_count, None, h2h_hits, h2h_ab
+        return pa_count, None, h2h_hits, h2h_ab, h2h_hr
 
     avg_raw_points = float(np.mean(game_stats))
-    return pa_count, avg_raw_points, h2h_hits, h2h_ab
+    return pa_count, avg_raw_points, h2h_hits, h2h_ab, h2h_hr
 
 
 def _team_opp_earned_runs_proxy(
@@ -1062,6 +1074,7 @@ def build_batter_inputs_from_rows(
     h2h_avg_raw_points = None
     h2h_hits = None
     h2h_ab = None
+    h2h_hr = None
     h2h_manual_override = False
     team_proxy = None
     opponent_arsenal = []
@@ -1093,13 +1106,30 @@ def build_batter_inputs_from_rows(
                 h2h_pa = override.pa
                 h2h_hits = override.hits
                 h2h_ab = override.ab
+                h2h_hr = override.hr
                 h2h_avg_raw_points = estimate_h2h_avg_raw_points_from_hits_ab(
                     override.hits,
                     override.ab,
                 )
                 h2h_manual_override = True
+                # Fill HR from Statcast when the override CSV omits it.
+                if (
+                    h2h_hr is None
+                    and sp_id is not None
+                    and batter_id is not None
+                ):
+                    _pa, _avg, _hits, _ab, h2h_hr = _compute_h2h_stats(
+                        batter_id,
+                        sp_id,
+                    )
             elif sp_id is not None and batter_id is not None:
-                h2h_pa, h2h_avg_raw_points, h2h_hits, h2h_ab = _compute_h2h_stats(
+                (
+                    h2h_pa,
+                    h2h_avg_raw_points,
+                    h2h_hits,
+                    h2h_ab,
+                    h2h_hr,
+                ) = _compute_h2h_stats(
                     batter_id,
                     sp_id,
                 )
@@ -1146,6 +1176,7 @@ def build_batter_inputs_from_rows(
         h2h_avg_raw_points=h2h_avg_raw_points,
         h2h_hits=h2h_hits,
         h2h_ab=h2h_ab,
+        h2h_hr=h2h_hr,
         h2h_manual_override=h2h_manual_override,
         team_opp_earned_runs_proxy=team_proxy,
         season_xwoba=statcast_windows.get("season_xwoba"),
@@ -1444,23 +1475,24 @@ def lookup_h2h_board_stats(
     player_name: str,
     version: str = "v2",
     game_context: Optional[dict] = None,
-) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
     """
-    Career H2H (pa, hits, ab) for the board vs-pitcher column.
+    Career H2H (pa, hits, ab, hr) for the board vs-pitcher column.
 
     Prefers ``data/reference/h2h_career_overrides.csv`` when a batter/SP pair
     is listed (all-time ESPN/StatMuse lines). Otherwise uses merged Statcast
-    shards (typically ~1–2 seasons).
+    shards (typically ~1–2 seasons). When an override omits HR, Statcast HR
+    is filled in when available.
     """
     player_rows = _batter_rows(player_name, version=version)
     if player_rows is None or player_rows.empty or not game_context:
-        return None, None, None
+        return None, None, None, None
 
     latest = player_rows.sort_values("game_date").iloc[-1]
     batter_id = coerce_mlb_id(latest.get("batter"))
     batter_team = latest.get("team")
     if batter_id is None or not isinstance(batter_team, str) or not batter_team.strip():
-        return None, None, None
+        return None, None, None, None
 
     sp_name, sp_id = _lookup_opposing_sp_for_context(game_context, batter_team)
     sp_id = coerce_mlb_id(sp_id)
@@ -1470,18 +1502,26 @@ def lookup_h2h_board_stats(
 
         override = lookup_career_h2h(player_name, sp_name)
         if override is not None:
-            return override.pa, override.hits, override.ab
+            hr = override.hr
+            if hr is None and sp_id is not None and batter_id is not None:
+                statcast = _load_merged_statcast(_merged_statcast_cache_key())
+                _pa, _avg, _hits, _ab, hr = _compute_h2h_stats(
+                    batter_id,
+                    sp_id,
+                    statcast=statcast,
+                )
+            return override.pa, override.hits, override.ab, hr
 
     if sp_id is None:
-        return None, None, None
+        return None, None, None, None
 
     statcast = _load_merged_statcast(_merged_statcast_cache_key())
-    pa, _, hits, ab = _compute_h2h_stats(
+    pa, _, hits, ab, hr = _compute_h2h_stats(
         batter_id,
         sp_id,
         statcast=statcast,
     )
-    return pa, hits, ab
+    return pa, hits, ab, hr
 
 
 def lookup_batter_score(

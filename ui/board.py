@@ -4,7 +4,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from odds_aggregation import dedupe_best_prop
+from ui.table_display import show_dataframe
+
+from odds_aggregation import dedupe_best_prop, filter_featured_prop_lines
 from ui.formatting import (
     best_fives_path,
     compare_view_path,
@@ -614,7 +616,6 @@ def _render_clickable_column_headers(df, key_prefix):
                     key=f"{key_prefix}_hdr_{spec['field']}",
                     on_click=_on_sort_header_click,
                     args=(key_prefix, spec["field"]),
-                    use_container_width=True,
                     help=GLOSSARY["header_click_sort"],
                 )
 
@@ -1075,7 +1076,9 @@ def _ranking_column_config():
 
 def _apply_data_filters(df, markets, min_edge, min_ev, *, dedupe=True):
     """Top-level filters: market type, optional min edge/EV (all AND-combined)."""
-    filtered = df.copy()
+    # Sportsbook + featured PrizePicks only — drop Goblin/Demon alts before
+    # (player, market) EV dedupe so Top Over/Under don't surface Demon lines.
+    filtered = filter_featured_prop_lines(df)
 
     if markets:
         filtered = filtered[filtered["market"].isin(markets)]
@@ -1188,7 +1191,7 @@ def _render_probability_rankings(filtered, key_prefix, version="v2"):
                 over_top,
                 version=version,
             )[RANKING_TABLE_COLUMNS]
-            st.dataframe(
+            show_dataframe(
                 style_probability_extremes(over_display),
                 hide_index=True,
                 height=min(42 * len(over_top) + 38, 420),
@@ -1204,7 +1207,7 @@ def _render_probability_rankings(filtered, key_prefix, version="v2"):
                 under_top,
                 version=version,
             )[RANKING_TABLE_COLUMNS]
-            st.dataframe(
+            show_dataframe(
                 style_probability_extremes(under_display),
                 hide_index=True,
                 height=min(42 * len(under_top) + 38, 420),
@@ -1237,7 +1240,7 @@ def _render_board_table(
             if column in visible_columns
         ]
 
-    st.dataframe(
+    show_dataframe(
         style_probability_extremes(display[table_columns]),
         hide_index=True,
         height=520,

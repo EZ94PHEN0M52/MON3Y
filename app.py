@@ -16,6 +16,11 @@ from batter_score_data import enrich_with_batter_score
 from ui.formatting import compare_view_path, enrich_with_over_under_probs
 from ui.market_filters import exclude_ui_markets
 from ui.player_stats import enrich_with_l5_l10_pct
+from ui.table_display import (
+    inject_spreadsheet_css,
+    is_mobile_client,
+    render_spreadsheet_toggle,
+)
 from utils import predictions_path
 
 
@@ -23,7 +28,10 @@ st.set_page_config(
     page_title="MLB Prop Model",
     page_icon="⚾",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
+
+inject_spreadsheet_css()
 
 
 def render_header(version):
@@ -33,6 +41,12 @@ def render_header(version):
         st.caption("V2 — Opponent strength, handedness, park proxy")
     else:
         st.caption("V1 — Rolling player form (frozen baseline)")
+
+    if is_mobile_client():
+        st.caption(
+            "Phone tip: pinch tables to zoom (like Sheets). "
+            "Drag to pan · Fit button · toggle in sidebar ☰."
+        )
 
 
 def load_predictions(version):
@@ -72,6 +86,8 @@ version = st.sidebar.selectbox(
     ["v2", "v1"],
     help="V2 adds opponent, handedness, and park features.",
 )
+
+render_spreadsheet_toggle()
 
 st.sidebar.markdown(f"**[Version compare]({compare_view_path()})** — V1 / V2 / V3 / Main")
 

@@ -340,6 +340,7 @@ class BatterInputs:
     h2h_avg_raw_points: Optional[float] = None
     h2h_hits: Optional[int] = None
     h2h_ab: Optional[int] = None
+    h2h_hr: Optional[int] = None
     h2h_manual_override: bool = False
     team_opp_earned_runs_proxy: Optional[float] = None
     max_raw_points_for_100: float = 6.0   # scaling benchmark for the 0-100 index
@@ -590,6 +591,7 @@ class BatterScoreResult:
     h2h_avg_raw_points: Optional[float] = None
     h2h_hits: Optional[int] = None
     h2h_ab: Optional[int] = None
+    h2h_hr: Optional[int] = None
     sp_tbd: bool = False
     team_proxy_used: bool = False
     # Hybrid path A: Q↑ / Q↓ / Q≈ / Q— (None when not computed).
@@ -868,6 +870,7 @@ def _compute_with_gates(
         h2h_avg_raw_points=batter.h2h_avg_raw_points,
         h2h_hits=batter.h2h_hits,
         h2h_ab=batter.h2h_ab,
+        h2h_hr=batter.h2h_hr,
         sp_tbd=sp_tbd,
         team_proxy_used=team_proxy,
     )
@@ -1078,6 +1081,7 @@ def _compute_with_gates_v3(
         h2h_avg_raw_points=batter.h2h_avg_raw_points,
         h2h_hits=batter.h2h_hits,
         h2h_ab=batter.h2h_ab,
+        h2h_hr=batter.h2h_hr,
         sp_tbd=sp_tbd,
         team_proxy_used=team_proxy,
     )

@@ -388,6 +388,59 @@ def test_dedupe_best_prop_one_row_per_player_market():
     ].iloc[0] == 0.20
 
 
+def test_filter_featured_prop_lines_drops_pp_alts():
+    from odds_aggregation import filter_featured_prop_lines
+
+    props = pd.DataFrame(
+        [
+            {
+                "player": "Seth Lugo",
+                "market": "pitcher_hits_allowed",
+                "bookmaker_key": "draftkings",
+                "line": 4.5,
+                "odds": -150,
+                "line_tier": None,
+            },
+            {
+                "player": "Seth Lugo",
+                "market": "pitcher_hits_allowed",
+                "bookmaker_key": "prizepicks",
+                "line": 4.5,
+                "odds": -137,
+                "line_tier": None,
+            },
+            {
+                "player": "Seth Lugo",
+                "market": "pitcher_hits_allowed",
+                "bookmaker_key": "prizepicks",
+                "line": 8.5,
+                "odds": 100,
+                "line_tier": "demon",
+            },
+            {
+                "player": "Seth Lugo",
+                "market": "pitcher_hits_allowed",
+                "bookmaker_key": "prizepicks",
+                "line": 2.5,
+                "odds": -137,
+                "line_tier": "goblin",
+            },
+        ]
+    )
+
+    featured = filter_featured_prop_lines(props)
+    lines = set(
+        zip(
+            featured["bookmaker_key"].tolist(),
+            featured["line"].tolist(),
+        )
+    )
+    assert ("draftkings", 4.5) in lines
+    assert ("prizepicks", 4.5) in lines
+    assert ("prizepicks", 8.5) not in lines
+    assert ("prizepicks", 2.5) not in lines
+
+
 def test_pitch_code_to_bucket():
     from pitch_matchup import pitch_code_to_bucket
 
@@ -730,10 +783,11 @@ def test_format_vs_pitcher_h2h_and_era_fallback():
         h2h_pa=MIN_PA_H2H_BOARD,
         h2h_hits=2,
         h2h_ab=7,
+        h2h_hr=1,
         opposing_sp_name="Ace",
         opposing_sp_era_l5=3.10,
     )
-    assert _format_vs_pitcher(h2h) == "2/7 .286"
+    assert _format_vs_pitcher(h2h) == "2/7 1hr .286"
 
     below_board_min = BatterScoreResult(
         batter_name="Test",
@@ -745,6 +799,7 @@ def test_format_vs_pitcher_h2h_and_era_fallback():
         h2h_pa=MIN_PA_H2H_BOARD - 1,
         h2h_hits=2,
         h2h_ab=7,
+        h2h_hr=1,
         opposing_sp_name="Ace",
         opposing_sp_era_l5=2.75,
     )
@@ -772,6 +827,7 @@ def test_format_vs_pitcher_h2h_and_era_fallback():
         h2h_pa=MIN_PA_H2H_BOARD,
         h2h_hits=0,
         h2h_ab=3,
+        h2h_hr=0,
         opposing_sp_name="Ace",
         opposing_sp_era_l5=3.10,
     )
@@ -786,9 +842,11 @@ def test_vs_pitcher_style_greens_career_h2h_avg():
     )
 
     assert h2h_avg_from_vs_pitcher("5/11 .455 · career") == 0.455
+    assert h2h_avg_from_vs_pitcher("5/11 2hr .455 · career") == 0.455
     assert vs_pitcher_style("5/11 .455 · career") == STYLE_VS_PITCHER_AVG
+    assert vs_pitcher_style("5/11 2hr .455 · career") == STYLE_VS_PITCHER_AVG
     assert vs_pitcher_style("2/7 .286 · career") == ""
-    assert vs_pitcher_style("4/10 .400") == STYLE_VS_PITCHER_AVG
+    assert vs_pitcher_style("4/10 1hr .400") == STYLE_VS_PITCHER_AVG
     assert vs_pitcher_style("SP ERA L5 2.75") == ""
 
 
@@ -871,7 +929,7 @@ def test_v2_arsenal_uses_merged_statcast(monkeypatch) -> None:
     monkeypatch.setattr(
         bsd,
         "_compute_h2h_stats",
-        lambda *_args, **_kw: (0, None, 0, 0),
+        lambda *_args, **_kw: (0, None, 0, 0, 0),
     )
 
     player_rows = pd.DataFrame(
@@ -919,15 +977,16 @@ def test_compute_h2h_stats_kirk_vs_seymour():
     seymour_id = 693855
 
     # Scoring path still uses the latest statcast shard only.
-    pa, avg_raw, hits, ab = _compute_h2h_stats(kirk_id, seymour_id)
+    pa, avg_raw, hits, ab, hr = _compute_h2h_stats(kirk_id, seymour_id)
     assert pa == 3
     assert hits == 0
     assert ab == 3
+    assert hr == 0
     assert avg_raw == 0.0
 
     # Board display merges all shards (includes 2025 Kirk vs Seymour).
     merged = _load_merged_statcast(_merged_statcast_cache_key())
-    board_pa, _, board_hits, board_ab = _compute_h2h_stats(
+    board_pa, _, board_hits, board_ab, board_hr = _compute_h2h_stats(
         kirk_id,
         seymour_id,
         statcast=merged,
@@ -935,6 +994,8 @@ def test_compute_h2h_stats_kirk_vs_seymour():
     assert board_pa >= 7
     assert board_hits == 2
     assert board_ab == 7
+    assert board_hr is not None
+    assert board_hr >= 0
 
 
 def test_build_all_batter_score_df_includes_all_players():
@@ -1137,6 +1198,9 @@ def test_build_top_batter_score_df_ranks_unique_players():
     with patch(
         "ui.batter_score_board.lookup_batter_score",
         return_value=mock_result,
+    ), patch(
+        "ui.batter_score_board.lookup_arsenal_weighted_woba",
+        return_value=0.312,
     ):
         top = build_top_batter_score_df(props, version="v2")
 
@@ -1147,6 +1211,8 @@ def test_build_top_batter_score_df_ranks_unique_players():
     ]
     assert top.iloc[0]["opposing_sp"] == "Starter"
     assert top.iloc[0]["l5_l10_pct"] == "70% / 60%"
+    assert "arsenal_woba" in top.columns
+    assert top.iloc[0]["arsenal_woba"] == ".312"
 
 
 def test_style_batter_score_board_highlights_combo_row():
@@ -1572,6 +1638,8 @@ if __name__ == "__main__":
     test_apply_manual_h2h_override()
     test_gated_full_score_requires_matchup_inputs()
     test_dedupe_best_prop_one_row_per_player_market()
+    test_filter_featured_prop_lines_drops_pp_alts()
+    test_filter_featured_prop_lines_drops_pp_alts()
     test_pitch_code_to_bucket()
     test_build_opponent_pitcher_arsenal_synthetic()
     test_build_opponent_pitcher_arsenal_detailed_synthetic()

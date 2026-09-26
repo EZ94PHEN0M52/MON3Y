@@ -5,6 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from odds_aggregation import dedupe_best_prop
 from ui.board import (
     RANKING_TABLE_COLUMNS,
@@ -185,7 +187,7 @@ def render_perfect_l5_props_board(
     display = _prepare_board_table_df(perfect, version=version)
     cols = [col for col in PERFECT_L5_PROP_COLUMNS if col in display.columns]
     st.caption(f"Showing **{len(perfect)}** props.")
-    st.dataframe(
+    show_dataframe(
         style_probability_extremes(display[cols]),
         hide_index=True,
         height=min(42 * len(perfect) + 38, 560),
@@ -246,7 +248,7 @@ def render_perfect_l5_pp_fantasy_board(
     )
     cols = [col for col in PERFECT_L5_FANTASY_COLUMNS if col in display.columns]
     st.caption(f"Showing **{len(perfect)}** batters.")
-    st.dataframe(
+    show_dataframe(
         display[cols],
         hide_index=True,
         height=min(42 * len(perfect) + 38, 560),

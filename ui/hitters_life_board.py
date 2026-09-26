@@ -5,6 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from fetch_rotowire_lineups import (
     ensure_rotowire_lineups,
     lineup_for_team,
@@ -86,7 +88,7 @@ def _lineup_context_for_game(
         version,
     )
 
-    lineups_df = ensure_rotowire_lineups(team_abbrs)
+    lineups_df = ensure_rotowire_lineups(team_abbrs, allow_live_fetch=False)
     away_lineup, away_source = (
         lineup_for_team(
             lineups_df,
@@ -283,7 +285,7 @@ def _render_hitters_life_dataframe(
                 na_position="last",
             ).reset_index(drop=True)
 
-    st.dataframe(
+    show_dataframe(
         style_hitters_life_board(display),
         hide_index=True,
         height=height,

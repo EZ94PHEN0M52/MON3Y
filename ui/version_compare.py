@@ -10,6 +10,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from odds_aggregation import dedupe_best_prop
 from predict import generate_predictions
 from ui.formatting import (
@@ -798,7 +800,7 @@ def render_version_compare_page():
         f"**{overlap_rows}** rows have Over/Under % in **2+** versions."
     )
 
-    st.dataframe(
+    show_dataframe(
         display[display_columns],
         hide_index=True,
         column_config=_compare_column_config(),

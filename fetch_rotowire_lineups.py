@@ -531,11 +531,17 @@ def update_official_lineups(
     return results
 
 
-def ensure_rotowire_lineups(team_abbrs: list[str]) -> pd.DataFrame:
+def ensure_rotowire_lineups(
+    team_abbrs: list[str],
+    *,
+    allow_live_fetch: bool = True,
+) -> pd.DataFrame:
     """
     Load cached lineups or fetch missing teams.
 
     When ``DISABLE_LIVE_FETCH=1``, returns cached data only (may be empty).
+    Pass ``allow_live_fetch=False`` from the Streamlit UI so game filters
+    never block on Rotowire network requests.
     """
     cached = load_rotowire_lineups()
     unique = sorted({abbr.upper() for abbr in team_abbrs if abbr})
@@ -549,6 +555,9 @@ def ensure_rotowire_lineups(team_abbrs: list[str]) -> pd.DataFrame:
         missing = [abbr for abbr in unique if abbr not in cached_teams]
 
     if not missing:
+        return cached
+
+    if not allow_live_fetch:
         return cached
 
     try:

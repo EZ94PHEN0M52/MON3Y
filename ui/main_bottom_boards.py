@@ -5,6 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from batter_score_data import build_game_context
 from hitters_life_data import (
     format_batting_average_column,
@@ -247,6 +249,19 @@ def build_hot_batter_score_df(
     return result.reset_index(drop=True)
 
 
+@st.cache_data(show_spinner="Building hot batters…")
+def _cached_hot_batter_score_df(
+    df: pd.DataFrame,
+    version: str,
+    markets: tuple[str, ...],
+) -> pd.DataFrame:
+    return build_hot_batter_score_df(
+        df,
+        version,
+        markets=list(markets) or None,
+    )
+
+
 def _hot_batter_score_column_config():
     config = _batter_score_table_column_config()
     config.update(_hand_split_avg_column_config())
@@ -355,7 +370,7 @@ def render_market_top_props_board(
         [col for col in MARKET_TOP_PROPS_COLUMNS if col in display.columns]
     ]
 
-    st.dataframe(
+    show_dataframe(
         style_probability_extremes(table),
         hide_index=True,
         height=min(42 * len(table) + 38, 640),
@@ -372,10 +387,10 @@ def render_hot_batter_score_board(
 ):
     """Top batter scores with elite L5 AVG and batting-board color rules."""
     markets = st.session_state.get(f"{key_prefix}_markets", [])
-    hot_df = build_hot_batter_score_df(
+    hot_df = _cached_hot_batter_score_df(
         df,
         version,
-        markets=markets or None,
+        tuple(markets or ()),
     )
 
     st.markdown("##### Hot batters — batter score")
@@ -400,7 +415,7 @@ def render_hot_batter_score_board(
         )
         return
 
-    st.dataframe(
+    show_dataframe(
         style_hot_batter_score_board(hot_df),
         hide_index=True,
         height=min(42 * len(hot_df) + 38, 520),

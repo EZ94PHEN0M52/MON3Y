@@ -235,15 +235,23 @@ GLOSSARY = {
     ),
     "props": "Number of prop lines matching the current filters.",
     "players": "Number of unique players matching the current filters.",
+    "main_board_lines": (
+        "Main board and Top Over / Top Under use sportsbook lines and "
+        "PrizePicks **featured** cards only. PrizePicks Goblin / Demon "
+        "(alternate) lines are excluded so a Demon (e.g. hits allowed 8.5) "
+        "cannot replace the regular menu line in EV dedupe."
+    ),
     "top_over_list": (
         "All props ranked by model Over % (highest to lowest). Uses the same "
         "Market / Edge / EV filters as the main board. One best book per "
-        "player and market — use **Market type** to narrow the list."
+        "player and market — use **Market type** to narrow the list. "
+        "Sportsbook + PrizePicks featured lines only (Goblin/Demon excluded)."
     ),
     "top_under_list": (
         "All props ranked by model Under % (highest to lowest). Uses the same "
         "Market / Edge / EV filters as the main board. One best book per "
-        "player and market."
+        "player and market. Sportsbook + PrizePicks featured lines only "
+        "(Goblin/Demon excluded)."
     ),
     "best_fives_page": (
         "Perfect last-5 boards for today's slate: (1) props (any book) that "

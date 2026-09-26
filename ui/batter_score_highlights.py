@@ -63,7 +63,8 @@ def h2h_avg_from_vs_pitcher(text) -> float | None:
     """
     Parse AVG from a Vs pitcher / H2H cell.
 
-    Accepts ``4/10 .400``, ``4/10 .400 · career``, or a bare ``.400``.
+    Accepts ``4/10 .400``, ``4/10 2hr .400``, ``4/10 2hr .400 · career``,
+    or a bare ``.400``.
     """
     if text is None or (isinstance(text, float) and pd.isna(text)):
         return None
@@ -72,7 +73,7 @@ def h2h_avg_from_vs_pitcher(text) -> float | None:
     if not cell or cell == "—" or cell.startswith("SP ERA"):
         return None
 
-    # Prefer an explicit .AVG token (works with trailing ``· career``).
+    # Prefer an explicit .AVG token (works with ``Nhr`` and trailing ``· career``).
     for token in reversed(cell.replace("·", " ").split()):
         token = token.strip()
         if token.startswith(".") and len(token) > 1:

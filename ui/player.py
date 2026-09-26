@@ -6,6 +6,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from ui.batter_score import render_batter_score_summary
 from ui.formatting import (
     format_commence_time,
@@ -432,7 +434,7 @@ def render_player_page(df, player_name, version):
                 lambda value: "🔥" if bool(value) else ""
             )
 
-        st.dataframe(
+        show_dataframe(
             style_probability_extremes(display[optional_columns]),
             hide_index=True,
             column_config=_market_table_column_config(),

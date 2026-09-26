@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from batter_score_data import (
     build_game_context,
     is_batter_score_validated,
@@ -218,7 +220,7 @@ def _render_batter_score_dataframe(
     height: int,
     column_config=None,
 ):
-    st.dataframe(
+    show_dataframe(
         style_batter_score_board(df),
         hide_index=True,
         height=height,
@@ -230,10 +232,16 @@ def _format_game_time(row) -> str:
     return format_game_time(row.get("game"), row.get("commence_time"))
 
 
-def _format_batting_avg(hits: int, ab: int) -> str:
-    """Format hits/AB and AVG like ``2/7 .286``."""
+def _format_batting_avg(
+    hits: int,
+    ab: int,
+    hr: int | None = None,
+) -> str:
+    """Format hits/AB and AVG; append ``Nhr`` only when HR ≥ 1."""
     avg_text = f"{hits / ab:.3f}".removeprefix("0")
-    return f"{hits}/{ab} {avg_text}"
+    if hr is None or int(hr) < 1:
+        return f"{hits}/{ab} {avg_text}"
+    return f"{hits}/{ab} {int(hr)}hr {avg_text}"
 
 
 def _format_vs_pitcher(
@@ -242,6 +250,7 @@ def _format_vs_pitcher(
     h2h_pa: int | None = None,
     h2h_hits: int | None = None,
     h2h_ab: int | None = None,
+    h2h_hr: int | None = None,
     player_name: str | None = None,
 ) -> str:
     """Career AVG vs opposing SP when PA threshold met; else SP ERA L5 if known."""
@@ -251,11 +260,12 @@ def _format_vs_pitcher(
     pa = h2h_pa if h2h_pa is not None else result.h2h_pa
     hits = h2h_hits if h2h_hits is not None else result.h2h_hits
     ab = h2h_ab if h2h_ab is not None else result.h2h_ab
+    hr = h2h_hr if h2h_hr is not None else getattr(result, "h2h_hr", None)
 
     if pa is not None and pa >= MIN_PA_H2H_BOARD:
         if ab is not None and ab > 0:
             hit_count = hits if hits is not None else 0
-            text = _format_batting_avg(hit_count, ab)
+            text = _format_batting_avg(hit_count, ab, hr=hr)
             if player_name and result.opposing_sp_name:
                 from h2h_career_overrides import lookup_career_h2h
 
@@ -316,7 +326,7 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
         version=version,
         game_context=game_context,
     )
-    h2h_pa, h2h_hits, h2h_ab = lookup_h2h_board_stats(
+    h2h_pa, h2h_hits, h2h_ab, h2h_hr = lookup_h2h_board_stats(
         row["player"],
         version=version,
         game_context=game_context,
@@ -341,7 +351,14 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
         h2h_pa=h2h_pa,
         h2h_hits=h2h_hits,
         h2h_ab=h2h_ab,
+        h2h_hr=h2h_hr,
         player_name=row["player"],
+    )
+
+    arsenal_woba = lookup_arsenal_weighted_woba(
+        row["player"],
+        version,
+        game_context,
     )
 
     built = {
@@ -352,6 +369,7 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
         ),
         "opposing_sp": opposing,
         "vs_pitcher": vs_pitcher,
+        "arsenal_woba": format_pitch_woba(arsenal_woba),
         "avg_vs_rhp": format_batting_average_vs_hand_column(
             row["player"],
             version,
@@ -395,12 +413,6 @@ def _build_batter_score_row(row, version: str, *, for_game_board: bool = False) 
     if for_game_board:
         batting_average = format_batting_average_column(row["player"], version)
         tb_log = format_total_bases_game_log(row["player"], version=version)
-        arsenal_woba = lookup_arsenal_weighted_woba(
-            row["player"],
-            version,
-            game_context,
-        )
-        built["arsenal_woba"] = format_pitch_woba(arsenal_woba)
         built["batting_average"] = batting_average
         built["total_bases_log"] = tb_log
         built["_batting_average"] = batting_average
@@ -419,10 +431,10 @@ def render_top_batter_scores(
 ):
     """Render Top 10 Batter Score table on the Hitter's Life page."""
     markets = st.session_state.get(f"{key_prefix}_markets", [])
-    top_df = build_top_batter_score_df(
+    top_df = _cached_top_batter_score_df(
         df,
         version,
-        markets=markets or None,
+        tuple(markets or ()),
     )
 
     st.markdown("##### Top 10 batter score")
@@ -480,13 +492,6 @@ def _batter_score_by_game_column_config():
     config = _batter_score_table_column_config()
     config.pop("game_time", None)
     config.update(_hand_split_avg_column_config())
-    config["arsenal_woba"] = st.column_config.TextColumn(
-        "Arsenal wOBA",
-        help=(
-            "Usage-weighted career wOBA vs the opposing SP's pitch mix "
-            "(last 5 starts), by pitch bucket."
-        ),
-    )
     config["batting_average"] = st.column_config.TextColumn(
         "Batting average",
         help=(
@@ -540,6 +545,13 @@ def _batter_score_table_column_config():
                 "`data/reference/h2h_career_overrides.csv` when present "
                 "(shown with ``· career``). "
                 "Light green when H2H average is above .300."
+            ),
+        ),
+        "arsenal_woba": st.column_config.TextColumn(
+            "Arsenal wOBA",
+            help=(
+                "Usage-weighted career wOBA vs the opposing SP's pitch mix "
+                "(last 5 starts), by pitch bucket."
             ),
         ),
         "pp_fantasy_line": st.column_config.TextColumn(
@@ -619,19 +631,57 @@ def build_all_batter_score_df(
     version: str,
     *,
     markets=None,
+    game: str | None = None,
 ) -> pd.DataFrame:
     """
     All unique batters by best batter_score row from today's slate.
 
     Same row-building logic as build_top_batter_score_df(), without the top-10
     limit. Includes a ``_game`` column for UI filtering (dropped before display).
+
+    When *game* is set, only that matchup's batters are built (much cheaper).
     """
     ranked = _prepare_batter_score_slate(df, markets=markets)
     if ranked.empty:
         return pd.DataFrame()
 
+    if game:
+        ranked = ranked[
+            ranked["game"].astype(str).eq(str(game))
+        ].reset_index(drop=True)
+        if ranked.empty:
+            return pd.DataFrame()
+
     return pd.DataFrame(
         _rows_from_batter_slate(ranked, version, for_game_board=True)
+    )
+
+
+@st.cache_data(show_spinner="Building batter scores…")
+def _cached_top_batter_score_df(
+    df: pd.DataFrame,
+    version: str,
+    markets: tuple[str, ...],
+) -> pd.DataFrame:
+    return build_top_batter_score_df(
+        df,
+        version,
+        markets=list(markets) or None,
+    )
+
+
+@st.cache_data(show_spinner="Building batter scores by game…")
+def _cached_all_batter_score_df(
+    df: pd.DataFrame,
+    version: str,
+    markets: tuple[str, ...],
+    game: str,
+) -> pd.DataFrame:
+    return build_all_batter_score_df(
+        df,
+        version,
+        markets=list(markets) or None,
+        game=None if game == "All games" else game,
     )
 
 
@@ -645,11 +695,7 @@ def render_game_batter_scores(
     from ui.hitters_life_highlights import render_tb_log_color_legend
 
     markets = st.session_state.get(f"{key_prefix}_markets", [])
-    all_df = build_all_batter_score_df(
-        df,
-        version,
-        markets=markets or None,
-    )
+    market_tuple = tuple(markets or ())
 
     st.markdown("##### Batter score by game")
     caption = (
@@ -671,25 +717,34 @@ def render_game_batter_scores(
     st.caption(caption)
     render_tb_log_color_legend()
 
-    if all_df.empty:
+    # Cheap slate pass so the Game selectbox can run *before* heavy row builds.
+    slate = _prepare_batter_score_slate(df, markets=markets or None)
+    if slate.empty or "game" not in slate.columns:
         st.caption("No batter scores available for the current slate.")
         return
 
     games = sorted(
-        game for game in all_df["_game"].dropna().unique() if str(game).strip()
+        game for game in slate["game"].dropna().unique() if str(game).strip()
     )
     selected_game = st.selectbox(
         "Game",
         ["All games", *games],
         key=f"{key_prefix}_batter_game_filter",
-        help="Filter batters to one matchup (away @ home).",
+        help="Filter batters to one matchup (away @ home). Builds only that game.",
     )
 
-    display_df = all_df
-    if selected_game != "All games":
-        display_df = all_df[all_df["_game"] == selected_game]
+    all_df = _cached_all_batter_score_df(
+        df,
+        version,
+        market_tuple,
+        selected_game,
+    )
 
-    display_df = display_df.reset_index(drop=True)
+    if all_df.empty:
+        st.caption("No batter scores available for the selected game.")
+        return
+
+    display_df = all_df.reset_index(drop=True)
 
     render_batter_score_add_controls(display_df, key_prefix)
 

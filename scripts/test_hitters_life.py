@@ -229,8 +229,13 @@ def test_format_h2h_avg_display():
     from hitters_life_data import format_h2h_avg_display
 
     assert format_h2h_avg_display(0.400, hits=4, ab=10) == "4/10 .400"
+    assert format_h2h_avg_display(0.400, hits=4, ab=10, hr=0) == "4/10 .400"
+    assert format_h2h_avg_display(0.400, hits=4, ab=10, hr=2) == "4/10 2hr .400"
+    assert format_h2h_avg_display(
+        0.429, hits=3, ab=7, hr=2, career_override=True,
+    ) == "3/7 2hr .429 · career"
     assert format_h2h_avg_display(None) == "—"
-    assert format_h2h_avg_display(0.250, hits=1, ab=4) == "1/4 .250"
+    assert format_h2h_avg_display(0.250, hits=1, ab=4, hr=0) == "1/4 .250"
 
 
 def test_pa_woba_xwoba_parts_savant_rules():

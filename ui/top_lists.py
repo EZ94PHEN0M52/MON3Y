@@ -2,6 +2,8 @@
 
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from ui.board import (
     RANKING_TABLE_COLUMNS,
     _apply_ranking_market_filter,
@@ -40,7 +42,7 @@ def _render_ranked_table(filtered, sort_col, key_prefix, version="v2"):
         f"**{sort_col.replace('_', ' ')}** "
         "(one best book per player and market)."
     )
-    st.dataframe(
+    show_dataframe(
         style_probability_extremes(display),
         hide_index=True,
         column_config=_ranking_column_config(),

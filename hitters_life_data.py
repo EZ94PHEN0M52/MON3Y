@@ -42,10 +42,18 @@ def _format_avg_rate(hits: int, ab: int) -> str:
     return avg_text
 
 
-def _format_avg_cell(hits: int, ab: int) -> str:
+def _format_avg_cell(
+    hits: int,
+    ab: int,
+    hr: int | None = None,
+) -> str:
+    """Format H2H as ``3/7 .429``, or ``3/7 2hr .429`` when HR ≥ 1."""
     if ab <= 0:
         return "—"
-    return f"{hits}/{ab} {_format_avg_rate(hits, ab)}"
+    avg = _format_avg_rate(hits, ab)
+    if hr is None or int(hr) < 1:
+        return f"{hits}/{ab} {avg}"
+    return f"{hits}/{ab} {int(hr)}hr {avg}"
 
 
 def format_h2h_avg_display(
@@ -53,14 +61,15 @@ def format_h2h_avg_display(
     *,
     hits: int | None = None,
     ab: int | None = None,
+    hr: int | None = None,
     career_override: bool = False,
 ) -> str:
-    """Display H2H average as ``hits/AB .AVG`` (e.g. ``4/10 .400``)."""
+    """Display H2H as ``hits/AB Nhr .AVG`` (e.g. ``4/10 2hr .400``)."""
     if h2h_avg is None or (isinstance(h2h_avg, float) and pd.isna(h2h_avg)):
         return "—"
 
     if ab and ab > 0 and hits is not None:
-        text = _format_avg_cell(int(hits), int(ab))
+        text = _format_avg_cell(int(hits), int(ab), hr=hr)
     else:
         avg_text = f"{float(h2h_avg):.3f}".removeprefix("0")
         text = avg_text if avg_text.startswith(".") else avg_text
@@ -836,7 +845,10 @@ def format_vs_pitcher_cell(
         return "—" if label == "—" else "SP TBD"
     if fields["h2h_avg"] is not None and fields.get("h2h_ab"):
         hits, ab = fields["h2h_hits"], fields["h2h_ab"]
-        return f"{label} · {_format_avg_cell(hits, ab)}"
+        return (
+            f"{label} · "
+            f"{_format_avg_cell(hits, ab, hr=fields.get('h2h_hr'))}"
+        )
     if fields.get("sp_era_l5") is not None:
         return f"{label} · SP ERA L5 {fields['sp_era_l5']:.2f}"
     return label
@@ -857,14 +869,14 @@ def build_vs_pitcher_fields(
     Split opposing-SP display for Hitter's Life.
 
     Returns ``opposing_sp`` (name), ``h2h_avg`` (float or None for sorting),
-    and optional ``h2h_hits`` / ``h2h_ab`` / ``sp_era_l5``.
+    and optional ``h2h_hits`` / ``h2h_ab`` / ``h2h_hr`` / ``sp_era_l5``.
     """
     label = sp_display if sp_display and sp_display != "TBD" else "SP TBD"
     opposing_sp = label if label != "SP TBD" else "—"
 
-    pa = hits = ab = None
+    pa = hits = ab = hr = None
     if game_context:
-        pa, hits, ab = lookup_h2h_board_stats(
+        pa, hits, ab, hr = lookup_h2h_board_stats(
             player_name,
             version=version,
             game_context=game_context,
@@ -892,6 +904,7 @@ def build_vs_pitcher_fields(
         "h2h_avg": h2h_avg,
         "h2h_hits": hits if hits is not None else None,
         "h2h_ab": ab,
+        "h2h_hr": hr,
         "h2h_career_override": career_override,
         "sp_era_l5": sp_era_l5,
     }
@@ -1048,6 +1061,7 @@ def build_hitters_life_row(
             vs_pitcher["h2h_avg"],
             hits=vs_pitcher["h2h_hits"],
             ab=vs_pitcher["h2h_ab"],
+            hr=vs_pitcher.get("h2h_hr"),
             career_override=bool(vs_pitcher.get("h2h_career_override")),
         ),
         "_h2h_avg": vs_pitcher["h2h_avg"],

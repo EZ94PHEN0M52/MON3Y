@@ -8,7 +8,11 @@ from game_lines import (
     load_current_game_lines,
 )
 from training_odds import attach_consensus_to_props
-from odds_aggregation import dedupe_best_prop, enrich_predictions
+from odds_aggregation import (
+    dedupe_best_prop,
+    enrich_predictions,
+    filter_featured_prop_lines,
+)
 from odds_movement import compute_movement_features
 from odds_snapshots import snapshots_dir
 from prop_scoring import (
@@ -95,6 +99,17 @@ def prepare_board(
         props = props[
             ~props["market"].isin(EXCLUDED_LIVE_PROP_MARKETS)
         ].copy()
+
+    # Main board / Top Over-Under: sportsbook + featured PP only.
+    # Goblin/Demon alts remain in current_props.parquet but are not scored.
+    before = len(props)
+    props = filter_featured_prop_lines(props)
+    dropped = before - len(props)
+    if dropped:
+        print(
+            f"Excluded {dropped:,} PrizePicks Goblin/Demon "
+            f"(alternate) rows from scoring"
+        )
 
     batters = pd.read_parquet(
         batter_path

@@ -5,6 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from fetch_sleeper_props import SLEEPER_PROPS_PATH
 from ui.formatting import format_commence_time, format_pct, market_label
 
@@ -141,7 +143,7 @@ def render_sleeper_picks_board(
         return
 
     show_cols = [c for c in DISPLAY_COLUMNS if c in filtered.columns]
-    st.dataframe(
+    show_dataframe(
         filtered[show_cols],
         hide_index=True,
         column_config=_column_config(),
@@ -155,7 +157,7 @@ def render_sleeper_picks_board(
     with st.expander("Stat breakdown"):
         breakdown = market_counts.reset_index()
         breakdown.columns = ["Stat", "Count"]
-        st.dataframe(breakdown, hide_index=True)
+        show_dataframe(breakdown, hide_index=True)
 
     mapped = filtered["market"].dropna().unique().tolist() if "market" in filtered.columns else []
     if mapped:

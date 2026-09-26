@@ -5,7 +5,7 @@
 - **GitHub:** [EZ94PHEN0M52/MON3Y](https://github.com/EZ94PHEN0M52/MON3Y) — tags **`v1`**, **`v2`**, **`v3`** mark frozen baselines; active development is on **`main`**
 - **Frozen local copies:** [`mlb-prop-model-v1/`](../mlb-prop-model-v1), [`mlb-prop-model-v2/`](../mlb-prop-model-v2), [`mlb-prop-model-v3/`](../mlb-prop-model-v3/)
 
-**Table of contents:** [Quick notes](#quick-notes) · [Quick start](#quick-start-for-beginners) · [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Official lineups (pre-game)](#official-rotowire-lineups-pre-game) · [Stuff strikeout model (v2)](#stuff-strikeout-model-v2) · [Pitcher outs learning](#pitcher-outs-learning-loop-track-1) · [Batter Score](#batter-score) · [Design](#design) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Changelog](#changelog)
+**Table of contents:** [Quick notes](#quick-notes) · [Quick start](#quick-start-for-beginners) · [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) · [Spin up V1 / V2](#spin-up-v1-or-v2-action-paths) · [Version compare](#version-compare-v1--v2--v3--main) · [Version snapshots](#version-snapshots) · [Cache-first policy](#cache-first-data-policy-no-redundant-api-calls) · [Daily workflow](#daily-workflow-v2) · [Official lineups (pre-game)](#official-rotowire-lineups-pre-game) · [Stuff strikeout model (v2)](#stuff-strikeout-model-v2) · [Pitcher outs learning](#pitcher-outs-learning-loop-track-1) · [Batter Score](#batter-score) · [Design](#design) · [Command reference](#command-reference) · [Streamlit UI](#streamlit-ui) · [Remote access (Tailscale)](#remote-access-tailscale--away-from-home) · [Changelog](#changelog)
 
 > **📌 Latest (main) note:** This folder (`mlb-prop-model/`) is the **active development workspace** on branch **`main`**. Use **`./run_daily.sh`** for the modern V2+ pipeline (Phases 1–6, Batter Score, Pick Builder, PP/Underdog fantasy boards, **Hitter's Life**, **Best 5s**). **Batter Score v3** (xwOBA + wRC+ form) sits beside v1/v2 — v1/v2 math unchanged. Batter boards now show **AVG vs R/L** (L5 · L10) and opposing **SP BAA** (vs R · vs L). Career **H2H overrides** live in git-tracked [`data/reference/h2h_career_overrides.csv`](data/reference/h2h_career_overrides.csv) (import via [`scripts/import_h2h_career_overrides.py`](scripts/import_h2h_career_overrides.py) — upsert only; never deletes other pairs). **Stuff K (v2)** needs a one-time **`./run_pitcher_strikeout_stuff.sh`**. Close to first pitch, run **`./run_official_lineups.sh`** for Rotowire **Today's Lineup** on Hitter's Life. Sibling **[`nfl-prop-model/`](nfl-prop-model/)** has its own V1/V2 board + **Sleeper Picks**. For the **V1 rolling-form baseline**, use a frozen copy, git tag **`v1`**, or `predict.py --version v1` here — **not** `./run_daily.sh`.
 
@@ -25,6 +25,10 @@
   - **Daily board refresh only:** `./run_daily.sh`
 
 See also [Shell scripts walkthrough](#shell-scripts--quick-walkthrough) and [Pitcher outs learning loop (Track 1)](#pitcher-outs-learning-loop-track-1).
+
+### Remote board access (away from home)
+
+Free personal option: **Tailscale** — keep Streamlit on your home Mac, open the board from phone/laptop on the same tailnet. `./run_daily.sh --streamlit` runs `tailscale serve` for you when the CLI is installed. Setup + checklist: [Remote access (Tailscale)](#remote-access-tailscale--away-from-home).
 
 ### Stuff K (v2) vs main pitcher strikeouts model
 
@@ -176,7 +180,7 @@ Later daily runs only need `./run_daily.sh` — it re-scores Stuff K v2 when `mo
 
 **Pre-game lineups (Hitter's Life only — optional, ~1–2 hours before first pitch):**
 
-Rotowire posts confirmed batting orders under **Today's Lineup** on each team page. Default orders (vs RHP/LHP) load automatically the first time you use the [Hitter's Life](#hitters-life-board) lineup filter; run this when you want **official** 1–9 orders instead:
+Rotowire posts confirmed batting orders under **Today's Lineup** on each team page. Default vs RHP/LHP and official orders are read from **`data/processed/rotowire_lineups.parquet`** only in Streamlit (no live Rotowire fetch on game select — keeps the board snappy). Populate the cache with **`./run_daily.sh`** (best-effort at end) and/or:
 
 ```bash
 ./run_official_lineups.sh              # fetch Today's Lineup for all slate teams → rotowire_lineups.parquet
@@ -1141,8 +1145,8 @@ See [Phase 6: Model refinement](#phase-6-model-refinement) below for details.
 **UI surfaces:**
 
 - **[Main board](#main-board-apppy--uiboardpy)** — sortable **Batter Score** column with labels **Full** / **Partial** / **Partial · SP TBD** / **Form only** (glossary tooltip); player names show **(L)/(R)** bat/throw hand when known
-- **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter). Columns: Player, **Game & time**, Opposing SP **(L)/(R)**, Vs pitcher, **PP fantasy**, **UD fantasy**, **L5 / L10 %** (vs PP line), **Batter score**, **Batter score v2**, **Batter score hybrid** (with Q↑/Q↓/Q≈). **Conditional highlights:** orange **UD fantasy** when Underdog line &lt; PrizePicks; sky blue when PP = UD; light green **Vs pitcher** when H2H AVG &gt; .300; yellow/green **L5 / L10 %** when L5 ≥ 80% with L10 below/above 80%; red row outline when UD lower + L5/L10 green
-- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** (Hitter's Life) — **all** slate batters with Top 10 PP/UD/L5-L10/Vs pitcher columns and highlights, plus **Arsenal wOBA**, **Batting average** (Szn / L5 / L10), **AVG vs R / AVG vs L** (L5 · L10), **SP BAA** (vs R · vs L), **TB per game (L5)**, and **Batter score hybrid**; **Game** selectbox above the table filters to one matchup (no **Game & time** column); **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
+- **[Main board → Top 10 batter score](#main-board-apppy--uiboardpy)** — highest Batter Score per player (respects Market type filter). Columns: Player, **Game & time**, Opposing SP **(L)/(R)**, Vs pitcher, **Arsenal wOBA**, **PP fantasy**, **UD fantasy**, **L5 / L10 %** (vs PP line), **Batter score**, **Batter score v2**, **Batter score hybrid** (with Q↑/Q↓/Q≈). **Conditional highlights:** orange **UD fantasy** when Underdog line &lt; PrizePicks; sky blue when PP = UD; light green **Vs pitcher** when H2H AVG &gt; .300; yellow/green **L5 / L10 %** when L5 ≥ 80% with L10 below/above 80%; red row outline when UD lower + L5/L10 green
+- **[Main board → Batter score by game](#main-board-apppy--uiboardpy)** (Hitter's Life) — **all** slate batters with Top 10 PP/UD/L5-L10/Vs pitcher columns and highlights, plus **Arsenal wOBA**, **Batting average** (Szn / L5 / L10), **AVG vs R / AVG vs L** (L5 · L10), **SP BAA** (vs R · vs L), **TB per game (L5)**, and **Batter score hybrid**; **Game** selectbox above the table filters to one matchup (no **Game & time** column) — selecting a game **builds only that matchup's batters** (cached via `@st.cache_data`); **[Batter Score Pick Builder](#pick-builder-uipick_builderpy)** add controls ([`ui/batter_score_board.py`](ui/batter_score_board.py))
 - **[Main board → Hot batters — batter score](#main-board-apppy--uiboardpy)** — top **20** Batter Scores among hitters in the top **15** L5 batting averages **and** a Hitter's Life batting-AVG highlight (green / orange / yellow); includes **Arsenal wOBA**, **xwOBA**, **wRC+**, **Batting average**, **AVG vs R/L**, **SP BAA**, **TB per game (L5)**, PP/UD/L5-L10/Vs pitcher, and **Batter score hybrid** (no **Game & time** column); tie-break favors blue TB soarer then AVG color ([`ui/main_bottom_boards.py`](ui/main_bottom_boards.py))
 - **[Hitter's Life](#hitters-life-board)** (`?view=hitters_life`) — batting-context board: Vs SP (name + H2H, ``· career`` when override active), **Arsenal wOBA**, **Batting average**, **AVG vs R/L**, **SP BAA**, **xwOBA** (L5 · L10), **wRC+** (L30 · L10), pitch-type wOBA selector, **PP fantasy** / **UD fantasy**, **Batter score hybrid**, TB game log; Rotowire lineup filter (**Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has run, else default vs SP hand)
 - **[Best 5s](#best-5s-board)** (`?view=best_fives`) — perfect L5 prop overs + perfect L5 PrizePicks fantasy hitters (full 5-game sample, strictly over)
@@ -1882,6 +1886,10 @@ All markets below are fetched from The Odds API (`odds_api.py` `PROP_MARKETS`), 
 
 Launch with `streamlit run app.py` or [`./run_daily.sh --streamlit`](#daily-workflow-v2). Routing uses query params: `?player=Name` for player pages, `?view=top_over` / `?view=top_under` for full ranked lists, `?view=hitters_life` for the [Hitter's Life board](#hitters-life-board), `?view=best_fives` for [Best 5s](#best-5s-board), `?view=sleeper_picks` for [Sleeper Picks](#sleeper-picks-board), `?view=compare` for version compare.
 
+**Phone tables (pinch-zoom):** On phone, boards render as a Google Sheets-style surface — **pinch to zoom** the whole table in/out, **drag to pan**, **Fit** (or double-tap) to see everything at once. Desktop stays on normal Streamlit tables. Sidebar toggle **Pinch-zoom tables (phone)** (on by default). See [`ui/table_display.py`](ui/table_display.py). Sidebar starts **collapsed** for more room on phones.
+
+**Game filter performance:** On **Batter score by game**, choosing a matchup builds **only that game's batters** (not the full slate) and caches the result. Top 10 / hot batters / Hitter's Life batting board also use `@st.cache_data` so changing Game does not recompute everything. Lineup filter reads **cached** Rotowire parquets only (no live scrape on select).
+
 ### Pick Builder (`ui/pick_builder.py`)
 
 Session favorites slip (Pickfinder-style, **no export**). Picks live in `st.session_state` for the current browser session only.
@@ -1899,8 +1907,8 @@ Dedicated batting-context page at **`?view=hitters_life`** (link **Hitter's Life
 
 - **Columns:** Player, **Game & time**, **Vs pitcher** (SP name + H2H hits/AB or SP ERA L5; ``· career`` when [career H2H override](#career-h2h-overrides-espn--statmuse) applies), **Arsenal wOBA** (usage-weighted vs SP mix), **Batting average** (Szn / L5 / L10), **AVG vs R** / **AVG vs L** (L5 · L10 from Statcast `p_throws`), **SP BAA** (opposing SP season BAA vs R · vs L from batter `stand`), **xwOBA** (L5 · L10), **wRC+** (L30 · L10), **wOBA vs {pitch type}** (selectbox: Fastball, Slider, …), **PP fantasy** / **UD fantasy**, **Batter score hybrid**, **TB per game** (last 5 games, space-separated)
 - **Highlights:** light green when season AVG &gt; .300 or H2H AVG &gt; .300; light green TB log when every game is non-zero ([`ui/hitters_life_highlights.py`](ui/hitters_life_highlights.py))
-- **Game filter:** same pattern as batter score by game
-- **Lineup filter** (when one game selected): prefers Rotowire **Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has cached **OFFICIAL** rows; otherwise **default vs opposing SP hand** ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) → `data/processed/rotowire_lineups.parquet`); orders batters 1–9 per team
+- **Game filter:** same pattern as batter score by game; batting board is `@st.cache_data`'d so switching games only filters the cached frame
+- **Lineup filter** (when one game selected): prefers Rotowire **Today's Lineup** when [`./run_official_lineups.sh`](#official-rotowire-lineups-pre-game) has cached **OFFICIAL** rows; otherwise **default vs opposing SP hand** from parquet ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py) → `data/processed/rotowire_lineups.parquet`, **`allow_live_fetch=False`** in the UI); orders batters 1–9 per team
 - Respects **Market type** filter only (not Edge / EV)
 
 ### Best 5s board
@@ -1924,7 +1932,7 @@ Dedicated Sleeper Picks page at **`?view=sleeper_picks`** (link **Sleeper Picks*
 
 ### Main board (`app.py` → `ui/board.py`)
 
-The board always shows **one row per (player, market)** — the book with the highest **EV** — via [`dedupe_best_prop()`](odds_aggregation.py) in [`apply_top_level_filters()`](ui/board.py). There is **no All books toggle** on the board. `predictions_v2.csv` still contains every book; dedupe happens at render time (and in `predictions_v2_best.csv` at write time).
+The board always shows **one row per (player, market)** — the book with the highest **EV** — via [`dedupe_best_prop()`](odds_aggregation.py) in [`apply_top_level_filters()`](ui/board.py). **PrizePicks Goblin/Demon** (`*_alternate`) lines are dropped first via [`filter_featured_prop_lines()`](odds_aggregation.py) so Top Over / Top Under and the main board use sportsbook + featured PP lines only (model Over/Under % stay on those regular lines). There is **no All books toggle** on the board. `predictions_v2.csv` still contains every book until the next `predict.py` run (which also excludes alts from scoring); dedupe happens at render time (and in `predictions_v2_best.csv` at write time).
 
 **Hint:** To compare prices across books for one player/market, open the **[player page](#player-pages-uplayerpy)** — it lists all books/lines per market with consensus line, devigged %, and best book/EV columns.
 
@@ -1971,6 +1979,70 @@ Board previews share the main board's Market / Edge / EV session state. Full lis
 ### Version compare (`ui/version_compare.py`)
 
 Side-by-side **Over %** / **Under %** for V1, V2, V3, and Main — see [Quick start → Version Compare](#open-streamlit-and-version-compare) and [Version compare (reference)](#version-compare-v1--v2--v3--main).
+
+### Remote access (Tailscale — away from home)
+
+Use **[Tailscale](https://tailscale.com/)** (free personal plan) to open the local Streamlit board from another device without putting the app on the public internet. Data, models, and `.env` stay on your home machine; that Mac must be **awake** with Streamlit running.
+
+#### One-time setup
+
+1. Create a Tailscale account and install the app on:
+   - **Home Mac** (runs the board)
+   - **Phone / travel laptop** (opens the board)
+2. Sign in with the **same account** on every device (they should appear in the [admin console](https://login.tailscale.com/admin/machines)).
+3. On the home Mac, confirm you’re connected (menu bar Tailscale icon, or `tailscale status`).
+
+#### Each day you want remote access
+
+On the **home Mac**, use `--streamlit` — [`run_daily.sh`](run_daily.sh) starts **Tailscale Serve** automatically (when the `tailscale` CLI is installed), then opens the board:
+
+```bash
+cd /path/to/mlb-prop-model
+./run_daily.sh --streamlit
+# morning form refresh, same lines + remote Serve:
+# ./run_daily.sh --skip-props --streamlit
+```
+
+Leave that terminal running (**Ctrl+C** to stop later — do **not** `Ctrl+Z` / suspend). The script prints `tailscale serve status` (https://…ts.net URL) before Streamlit starts.
+
+On your **phone or travel laptop** (Tailscale connected), open that Serve URL, or:
+
+```text
+http://<home-mac-tailscale-ip>:8501
+```
+
+Find the home Mac’s **100.x.x.x** address in the Tailscale app / admin console, or on the Mac: `tailscale ip -4`.
+
+**If you start Streamlit without `run_daily.sh`**, enable Serve yourself (same port as Streamlit):
+
+```bash
+streamlit run app.py --server.port 8501   # terminal 1
+tailscale serve --bg http://127.0.0.1:8501   # terminal 2
+tailscale serve status
+```
+
+#### Optional: bind Streamlit on all interfaces (no Serve)
+
+```bash
+streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+```
+
+Then open `http://<home-mac-tailscale-ip>:8501` from another Tailscale device. This also listens on your LAN; Serve (what `run_daily.sh --streamlit` uses) is the tighter default.
+
+#### Stop remote publish / checklist
+
+```bash
+tailscale serve reset          # stop Serve when done
+# Ctrl+C the Streamlit / run_daily terminal
+```
+
+| Need | Reminder |
+|------|----------|
+| Home Mac awake | Sleep / lid-closed can drop the board; keep awake or use Energy Saver “prevent sleep” while away |
+| Fresh slate | Still run `./run_daily.sh` (or `--skip-props`) on the home Mac before relying on remote view |
+| Tailscale CLI | `run_daily.sh --streamlit` skips Serve with a note if `tailscale` is not on `PATH` (app install may need CLI enabled) |
+| Suspended jobs | Don’t `Ctrl+Z` Streamlit — use Ctrl+C; see [Troubleshooting](#troubleshooting) |
+| Security | Tailscale is private to your devices — still don’t share the Serve URL outside your account |
 
 ---
 
@@ -2548,6 +2620,7 @@ Never commit `.env`, `data/`, or `models/` (see `.gitignore`).
 | `OUT_OF_USAGE_CREDITS` / quota exhausted | Odds API monthly credits used up. If `data/processed/current_props.parquet` exists, fetch keeps the cache and exits non-zero. Run `./run_daily.sh --skip-props` to skip the fetch and use cached props. |
 | Zero MLB events from `--props` | No games scheduled today, or API key/quota issue |
 | Pipeline or Streamlit accidentally suspended (**Ctrl+Z**) | Use **Ctrl+C** to stop cleanly. If suspended, run `jobs` then `kill %1` (or relevant job number) before re-running `./run_daily.sh`. Do not suspend mid `ensure_features.py --fix` — partial parquets may corrupt |
+| Can’t open Streamlit away from home via Tailscale | Home Mac awake + Tailscale connected on both devices; use `./run_daily.sh --streamlit` (auto Serve) or `tailscale serve --bg http://127.0.0.1:8501`. Use the Serve URL / `100.x` IP — not `localhost` on the phone. If Serve was skipped, install/enable the Tailscale CLI (`tailscale status`). See [Remote access (Tailscale)](#remote-access-tailscale--away-from-home) |
 | Version compare shows all **—** | Run [Quick start → Prepare all versions](#prepare-all-versions-for-version-compare); at minimum `./run_daily.sh` for V2/Main. Copy V3 CSV from `mlb-prop-model-v3/`. Run V1 `predict.py` when `models/v1/` exists |
 | Version compare **Generate missing predictions** does nothing | CSV may already exist, or `models/v1/` / `models/v2/` is empty — check **Version sources** expander on compare page |
 | Range filter shows "All values: X" instead of slider | Column has only one unique numeric value — expected; filter is a no-op until lines vary |
@@ -2562,7 +2635,7 @@ Rotowire publishes two lineup types on each team's [batting orders](https://www.
 
 | Rotowire block | When available | Used by |
 |----------------|----------------|---------|
-| **Default vs. RHP / vs. LHP** | Always (projected platoon order) | Auto-cached the first time you open [Hitter's Life → Lineup filter](#hitters-life-board) |
+| **Default vs. RHP / vs. LHP** | Always (projected platoon order) | Cached in `rotowire_lineups.parquet` (from `./run_daily.sh` / prior fetches). Streamlit **does not** live-fetch on game select. |
 | **Today's Lineup** | Close to first pitch (confirmed order) | Cached by **`./run_official_lineups.sh`** — board **prefers** this when present |
 
 **Scope:** Display-only — reorders/filters batters on the **Hitter's Life** board. Does **not** change `predictions_v2.csv`, edge, EV, or Batter Score math.
@@ -2815,6 +2888,27 @@ Keep this file in sync when adding new CLI flags, paths, or workflow steps. Upda
 ---
 
 ## Changelog
+
+### 2026-09-25 — Faster game filters + phone pinch-zoom tables
+
+**Perf — Batter score by game / Hitter's Life:**
+- Selecting a **Game** on Batter score by game builds **only that matchup** (not the full slate) and caches via `@st.cache_data` ([`ui/batter_score_board.py`](ui/batter_score_board.py))
+- Top 10 and Hot batters boards also cached; Hitter's Life batting board already was
+- Lineup filter uses **`ensure_rotowire_lineups(..., allow_live_fetch=False)`** so game select never blocks on Rotowire network ([`fetch_rotowire_lineups.py`](fetch_rotowire_lineups.py), [`ui/hitters_life_board.py`](ui/hitters_life_board.py))
+
+**UI — phone spreadsheet tables:**
+- [`ui/table_display.py`](ui/table_display.py) — on phone, pinch-to-zoom / pan / Fit sheet surface; desktop keeps `st.dataframe`
+- Sidebar toggle **Pinch-zoom tables (phone)**; sidebar starts collapsed
+
+**Also in this ship:** Perfect L5 all-book + PP Goblin/Demon alts, featured-line filter, career H2H CSS HR display, Tailscale Serve in `run_daily.sh`, hybrid Batter Score board column (see prior changelog entries).
+
+---
+
+### 2026-09-24 — Remote access via Tailscale
+
+**Docs:** [Remote access (Tailscale)](#remote-access-tailscale--away-from-home) — free personal tailnet + `tailscale serve` to open local Streamlit away from home; Quick notes + Troubleshooting entry.
+
+---
 
 ### 2026-09-20 — Hybrid Batter Score replaces v3 on boards
 

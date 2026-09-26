@@ -5,6 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from ui.table_display import show_dataframe
+
 from batter_score_data import build_game_context, lookup_batter_score
 from fetch_sleeper_props import SLEEPER_PROPS_PATH
 from hitters_life_data import (
@@ -179,6 +181,7 @@ def enrich_sleeper_hrr_row(row: pd.Series, *, version: str) -> dict:
         vs_pitcher["h2h_avg"],
         hits=vs_pitcher["h2h_hits"],
         ab=vs_pitcher["h2h_ab"],
+        hr=vs_pitcher.get("h2h_hr"),
     )
     built["_h2h_avg"] = vs_pitcher["h2h_avg"]
     built["arsenal_woba"] = format_pitch_woba(
@@ -319,7 +322,7 @@ def render_sleeper_hrr_board(
 
     show_cols = [col for col in DISPLAY_COLUMNS if col in board.columns]
     styled = style_hitters_life_board(board[show_cols + ["_h2h_avg", "player"]])
-    st.dataframe(
+    show_dataframe(
         styled,
         hide_index=True,
         column_config=_column_config(),

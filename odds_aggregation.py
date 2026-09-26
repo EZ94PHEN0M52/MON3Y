@@ -37,6 +37,90 @@ DEDUP_PROP_KEYS = [
     "market",
 ]
 
+# PrizePicks Goblin/Demon (Odds API *_alternate). Featured PP uses no tier.
+PRIZEPICKS_ALTERNATE_TIERS = frozenset({"goblin", "demon"})
+PRIZEPICKS_BOOKMAKER_KEY = "prizepicks"
+
+
+def _line_key(value):
+    """Round prop lines for set membership (4.5 vs 4.50)."""
+    try:
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return None
+        return round(float(value), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def filter_featured_prop_lines(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop PrizePicks Goblin/Demon alts so main board / Top Over-Under use
+    sportsbook + featured PP lines only.
+
+    Identification (any match drops the row):
+    - ``line_tier`` in {goblin, demon}
+    - PrizePicks American odds +100 (Odds API Demon convention)
+    - PrizePicks line not on any sportsbook menu for the same player/market
+      when at least one sportsbook line exists for that pair
+    """
+    if df is None or getattr(df, "empty", True):
+        return df.copy() if df is not None else df
+
+    if "bookmaker_key" not in df.columns:
+        return df.copy()
+
+    working = df.copy()
+    keys = (
+        working["bookmaker_key"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+    is_pp = keys.eq(PRIZEPICKS_BOOKMAKER_KEY)
+    drop = pd.Series(False, index=working.index)
+
+    if "line_tier" in working.columns:
+        tier = (
+            working["line_tier"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        drop |= is_pp & tier.isin(PRIZEPICKS_ALTERNATE_TIERS)
+
+    if "odds" in working.columns:
+        odds = pd.to_numeric(working["odds"], errors="coerce")
+        drop |= is_pp & odds.eq(100)
+
+    need = {"player", "market", "line"}
+    if need.issubset(working.columns) and is_pp.any() and (~is_pp).any():
+        sb = working.loc[~is_pp, ["player", "market", "line"]].copy()
+        sb["_line_key"] = sb["line"].map(_line_key)
+        sb = sb.dropna(subset=["_line_key"])
+        allowed = (
+            sb.groupby(["player", "market"], dropna=False)["_line_key"]
+            .agg(lambda values: frozenset(values))
+        )
+        pp = working.loc[is_pp, ["player", "market", "line"]].copy()
+        pp["_line_key"] = pp["line"].map(_line_key)
+        pp["_allowed"] = list(
+            zip(pp["player"], pp["market"])
+        )
+        pp["_allowed"] = pp["_allowed"].map(
+            lambda key: allowed.get(key)
+        )
+        off_menu = pp.apply(
+            lambda row: (
+                row["_allowed"] is not None
+                and row["_line_key"] is not None
+                and row["_line_key"] not in row["_allowed"]
+            ),
+            axis=1,
+        )
+        drop.loc[off_menu.index] |= off_menu.to_numpy()
+
+    return working.loc[~drop].copy()
+
 
 def _book_weight(
     bookmaker_key,

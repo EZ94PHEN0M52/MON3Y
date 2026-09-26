@@ -1,67 +1,193 @@
 batter,pitcher,hits,ab,hr,rbi,team,source_url
-Aaron Judge,Brandon Pfaadt,3,3,2,5,NYY,https://www.espn.com/mlb/player/batvspitch/_/id/4721302/brandon-pfaadt
-Braden Montgomery,Jackson Jobe,3,3,0,3,CWS,https://www.espn.com/mlb/player/batvspitch/_/id/4872647/jackson-jobe
-Michael Busch,Nick Lodolo,3,4,0,0,CHC,https://www.statmuse.com/mlb/ask/michael-busch-vs-nick-lodolo
-Zack Gelof,Tanner Bibee,4,6,0,0,ATH,https://www.espn.co.uk/mlb/player/batvspitch/_/id/4345278/tanner-bibee
-Angel Martinez,Jacob Lopez,2,3,0,0,CLE,https://www.espn.co.uk/mlb/player/batvspitch/_/id/42239
-James Wood,Michael McGreevy,2,3,0,0,WSH,https://www.espn.com/mlb/player/batvspitch/_/id/4424141/michael-mcgreevy
-Victor Caratini,Reid Detmers,2,3,1,3,MIN,https://www.espn.com/mlb/player/batvspitch/_/id/4326697/reid-detmers
-Wade Meckler,Joe Ryan,2,3,0,0,LAA,https://www.espn.com/mlb/player/batvspitch/_/id/42450/joe-ryan
-Lawrence Butler,Tanner Bibee,5,8,0,2,ATH,https://www.espn.co.uk/mlb/player/batvspitch/_/id/4345278/tanner-bibee
-Jackson Merrill,Eury Perez,3,5,0,1,SD,https://www.espn.com/mlb/player/batvspitch/_/id/4917854/eury-perez
-Jake Burger,Jose Soriano,4,7,0,2,TEX,https://www.espn.co.uk/mlb/player/batvspitch/_/id/40973/jose-soriano
-William Contreras,Trevor Rogers,4,7,0,4,MIL,https://www.espn.co.uk/mlb/player/batvspitch/_/id/39640/trevor-rogers
-Wyatt Langford,Jose Soriano,4,8,0,3,TEX,https://www.espn.co.uk/mlb/player/batvspitch/_/id/40973/jose-soriano
-Ke'Bryan Hayes,Matthew Boyd,3,6,0,1,CIN,https://www.espn.com/mlb/player/batvspitch/_/id/34401/matthew-boyd
-Austin Martin,Reid Detmers,2,4,0,2,MIN,https://www.espn.com/mlb/player/batvspitch/_/id/4326697/reid-detmers
-Bryce Harper,Christian Scott,2,4,1,2,PHI,https://www.espn.com/mlb/player/batvspitch/_/id/4414215/christian-scott
-Zach Neto,Joe Ryan,5,11,0,1,LAA,https://www.espn.com/mlb/player/batvspitch/_/id/42450/joe-ryan
-Isiah Kiner-Falefa,Freddy Peralta,4,9,0,0,BOS,https://www.espn.co.uk/mlb/player/batvspitch/_/id/39825/freddy-peralta
-Colt Keith,Sean Burke,3,7,1,1,DET,https://www.espn.co.uk/mlb/player/batvspitch/_/id/4867679/sean-burke
-Jarren Duran,Freddy Peralta,3,7,0,0,BOS,https://www.espn.co.uk/mlb/player/batvspitch/_/id/39825/freddy-peralta
-Luis Garcia Jr.,Brandon Pfaadt,3,7,1,4,NYY,https://www.espn.com/mlb/player/batvspitch/_/id/4721302/brandon-pfaadt
-Carson Kelly,Nick Lodolo,4,10,1,1,CHC,https://www.statmuse.com/mlb/ask/carson-kelly-vs-nick-lodolo-gamelog
-Pete Crow-Armstrong,Nick Lodolo,4,10,0,2,CHC,https://www.espn.com/mlb/player/batvspitch/_/id/4717833/pete-crow-armstrong
-Dillon Dingler,Sean Burke,2,5,0,1,DET,https://www.espn.co.uk/mlb/player/batvspitch/_/id/4867679/sean-burke
-Ha-Seong Kim,Hayden Wesneski,2,5,0,0,ATL,https://www.espn.com/mlb/player/batvspitch/_/id/42996/hayden-wesneski
-Jackson Chourio,Trevor Rogers,2,5,0,0,MIL,https://www.espn.co.uk/mlb/player/batvspitch/_/id/39640/trevor-rogers
-Jose Trevino,Matthew Boyd,2,5,0,2,CIN,https://www.espn.com/mlb/player/batvspitch/_/id/34401/matthew-boyd
-LaMonte Wade Jr.,Grant Holmes,2,5,0,0,HOU,https://www.espn.com/mlb/player/batvspitch/_/id/33840/grant-holmes
-Otto Lopez,Casey Mize,2,5,0,0,MIA,https://www.espn.co.uk/mlb/player/batvspitch/_/id/41167
-Xander Bogaerts,Eury Perez,2,5,0,0,SD,https://www.espn.com/mlb/player/batvspitch/_/id/4917854/eury-perez
-Corey Seager,Jose Soriano,4,11,1,3,TEX,https://www.espn.co.uk/mlb/player/batvspitch/_/id/40973/jose-soriano
-Nico Hoerner,Nick Lodolo,7,21,0,2,CHC,https://www.espn.com/mlb/player/batvspitch/_/id/41219/nico-hoerner
-Seiya Suzuki,Nick Lodolo,6,18,0,4,CHC,https://www.statmuse.com/mlb/ask/seiya-suzuki-vs-nick-lodolo
-Jesus Sanchez,Cam Schlittler,4,12,0,0,AZ,https://www.espn.com/mlb/player/batvspitch/_/id/5134581/cam-schlittler
-Bryan De La Cruz,Christian Scott,2,6,0,0,PHI,https://www.espn.com/mlb/player/batvspitch/_/id/4414215/christian-scott
-Matt Shaw,Nick Lodolo,2,6,1,2,CHC,https://www.espn.com/mlb/player/batvspitch/_/id/4867667/matt-shaw
-Miguel Vargas,Jackson Jobe,2,6,0,0,CWS,https://www.espn.com/mlb/player/batvspitch/_/id/4872647/jackson-jobe
-Ian Happ,Nick Lodolo,8,25,1,4,CHC,https://www.espn.com/mlb/player/batvspitch/_/id/34945/ian-happ
-Bryan Reynolds,Michael Wacha,2,3,0,1,PIT,
-Caleb Durbin,Griffin Jax,2,3,0,1,BOS,
-Chandler Simpson,Patrick Sandoval,2,3,0,0,TB,
-Christian Walker,Martín Pérez,2,3,0,0,HOU,
-Josh Naylor,Tomoyuki Sugano,2,3,0,0,SEA,
-Kyle Stowers,Walker Buehler,2,3,1,1,MIA,
-Manny Machado,Sandy Alcantara,9,15,0,3,SD,
-Lars Nootbaar,Will Warren,3,5,0,0,AZ,
-Zach McKinstry,Davis Martin,3,5,0,2,DET,
-Sam Antonacci,Troy Melton,4,8,1,1,CWS,
-Austin Riley,Hunter Brown,3,6,0,1,ATL,
-Taylor Ward,Tomoyuki Sugano,3,6,0,2,SEA,
-Tristan Peters,Troy Melton,3,6,0,0,CWS,
-Willson Contreras,Griffin Jax,2,4,2,4,BOS,
-Ronald Acuña Jr.,Hunter Brown,4,9,0,0,ATL,
-Xander Bogaerts,Sandy Alcantara,6,14,1,2,SD,
-Alec Burleson,Jake Irvin,3,7,1,2,STL,
-Nick Fortes,Patrick Sandoval,3,7,1,2,TB,
-Riley Greene,Davis Martin,5,12,0,1,DET,
-José Caballero,Corbin Burnes,4,10,0,1,NYY,
-Dominic Smith,Hunter Brown,2,5,0,0,ATL,
-J.P. Crawford,Tomoyuki Sugano,2,5,0,0,SEA,
-Seiya Suzuki,Rhett Lowder,2,5,0,0,CHC,
-Vladimir Guerrero Jr.,Jacob deGrom,3,8,0,1,TOR,
-Juan Soto,Cristopher Sánchez,6,17,0,0,NYM,
-Mark Vientos,Cristopher Sánchez,6,17,2,6,NYM,
-Chase Meidroth,Troy Melton,2,6,0,0,CWS,
-Trevor Story,Griffin Jax,2,6,0,0,BOS,
+Aaron Judge,Brandon Pfaadt,3,3,2.0,5.0,NYY,https://www.espn.com/mlb/player/batvspitch/_/id/4721302/brandon-pfaadt
+Braden Montgomery,Jackson Jobe,3,3,0.0,3.0,CWS,https://www.espn.com/mlb/player/batvspitch/_/id/4872647/jackson-jobe
+Michael Busch,Nick Lodolo,3,4,0.0,0.0,CHC,https://www.statmuse.com/mlb/ask/michael-busch-vs-nick-lodolo
+Zack Gelof,Tanner Bibee,4,6,0.0,0.0,ATH,https://www.espn.co.uk/mlb/player/batvspitch/_/id/4345278/tanner-bibee
+Angel Martinez,Jacob Lopez,2,3,0.0,0.0,CLE,https://www.espn.co.uk/mlb/player/batvspitch/_/id/42239
+James Wood,Michael McGreevy,2,3,0.0,0.0,WSH,https://www.espn.com/mlb/player/batvspitch/_/id/4424141/michael-mcgreevy
+Victor Caratini,Reid Detmers,2,3,1.0,3.0,MIN,https://www.espn.com/mlb/player/batvspitch/_/id/4326697/reid-detmers
+Wade Meckler,Joe Ryan,2,3,0.0,0.0,LAA,https://www.espn.com/mlb/player/batvspitch/_/id/42450/joe-ryan
+Lawrence Butler,Tanner Bibee,5,8,0.0,2.0,ATH,https://www.espn.co.uk/mlb/player/batvspitch/_/id/4345278/tanner-bibee
+Jackson Merrill,Eury Perez,3,5,0.0,1.0,SD,https://www.espn.com/mlb/player/batvspitch/_/id/4917854/eury-perez
+Jake Burger,Jose Soriano,4,7,0.0,2.0,TEX,https://www.espn.co.uk/mlb/player/batvspitch/_/id/40973/jose-soriano
+William Contreras,Trevor Rogers,4,7,0.0,4.0,MIL,https://www.espn.co.uk/mlb/player/batvspitch/_/id/39640/trevor-rogers
+Wyatt Langford,Jose Soriano,4,8,0.0,3.0,TEX,https://www.espn.co.uk/mlb/player/batvspitch/_/id/40973/jose-soriano
+Ke'Bryan Hayes,Matthew Boyd,3,6,0.0,1.0,CIN,https://www.espn.com/mlb/player/batvspitch/_/id/34401/matthew-boyd
+Austin Martin,Reid Detmers,2,4,0.0,2.0,MIN,https://www.espn.com/mlb/player/batvspitch/_/id/4326697/reid-detmers
+Bryce Harper,Christian Scott,2,4,1.0,2.0,PHI,https://www.espn.com/mlb/player/batvspitch/_/id/4414215/christian-scott
+Zach Neto,Joe Ryan,5,11,0.0,1.0,LAA,https://www.espn.com/mlb/player/batvspitch/_/id/42450/joe-ryan
+Isiah Kiner-Falefa,Freddy Peralta,4,9,0.0,0.0,BOS,https://www.espn.co.uk/mlb/player/batvspitch/_/id/39825/freddy-peralta
+Colt Keith,Sean Burke,3,7,1.0,1.0,DET,https://www.espn.co.uk/mlb/player/batvspitch/_/id/4867679/sean-burke
+Jarren Duran,Freddy Peralta,3,7,0.0,0.0,BOS,https://www.espn.co.uk/mlb/player/batvspitch/_/id/39825/freddy-peralta
+Luis Garcia Jr.,Brandon Pfaadt,3,7,1.0,4.0,NYY,https://www.espn.com/mlb/player/batvspitch/_/id/4721302/brandon-pfaadt
+Carson Kelly,Nick Lodolo,4,10,1.0,1.0,CHC,https://www.statmuse.com/mlb/ask/carson-kelly-vs-nick-lodolo-gamelog
+Pete Crow-Armstrong,Nick Lodolo,4,10,0.0,2.0,CHC,https://www.espn.com/mlb/player/batvspitch/_/id/4717833/pete-crow-armstrong
+Dillon Dingler,Sean Burke,2,5,0.0,1.0,DET,https://www.espn.co.uk/mlb/player/batvspitch/_/id/4867679/sean-burke
+Ha-Seong Kim,Hayden Wesneski,2,5,0.0,0.0,ATL,https://www.espn.com/mlb/player/batvspitch/_/id/42996/hayden-wesneski
+Jackson Chourio,Trevor Rogers,2,5,0.0,0.0,MIL,https://www.espn.co.uk/mlb/player/batvspitch/_/id/39640/trevor-rogers
+Jose Trevino,Matthew Boyd,2,5,0.0,2.0,CIN,https://www.espn.com/mlb/player/batvspitch/_/id/34401/matthew-boyd
+LaMonte Wade Jr.,Grant Holmes,2,5,0.0,0.0,HOU,https://www.espn.com/mlb/player/batvspitch/_/id/33840/grant-holmes
+Otto Lopez,Casey Mize,2,5,0.0,0.0,MIA,https://www.espn.co.uk/mlb/player/batvspitch/_/id/41167
+Xander Bogaerts,Eury Perez,2,5,0.0,0.0,SD,https://www.espn.com/mlb/player/batvspitch/_/id/4917854/eury-perez
+Corey Seager,Jose Soriano,4,11,1.0,3.0,TEX,https://www.espn.co.uk/mlb/player/batvspitch/_/id/40973/jose-soriano
+Nico Hoerner,Nick Lodolo,7,21,0.0,2.0,CHC,https://www.espn.com/mlb/player/batvspitch/_/id/41219/nico-hoerner
+Seiya Suzuki,Nick Lodolo,6,18,0.0,4.0,CHC,https://www.statmuse.com/mlb/ask/seiya-suzuki-vs-nick-lodolo
+Jesus Sanchez,Cam Schlittler,4,12,0.0,0.0,AZ,https://www.espn.com/mlb/player/batvspitch/_/id/5134581/cam-schlittler
+Bryan De La Cruz,Christian Scott,2,6,0.0,0.0,PHI,https://www.espn.com/mlb/player/batvspitch/_/id/4414215/christian-scott
+Matt Shaw,Nick Lodolo,2,6,1.0,2.0,CHC,https://www.espn.com/mlb/player/batvspitch/_/id/4867667/matt-shaw
+Miguel Vargas,Jackson Jobe,2,6,0.0,0.0,CWS,https://www.espn.com/mlb/player/batvspitch/_/id/4872647/jackson-jobe
+Ian Happ,Nick Lodolo,8,25,1.0,4.0,CHC,https://www.espn.com/mlb/player/batvspitch/_/id/34945/ian-happ
+Bryan Reynolds,Michael Wacha,2,3,0.0,1.0,PIT,
+Caleb Durbin,Griffin Jax,2,3,0.0,1.0,BOS,
+Chandler Simpson,Patrick Sandoval,2,3,0.0,0.0,TB,
+Christian Walker,Martín Pérez,2,3,0.0,0.0,HOU,
+Josh Naylor,Tomoyuki Sugano,2,3,0.0,0.0,SEA,
+Kyle Stowers,Walker Buehler,2,3,1.0,1.0,MIA,
+Manny Machado,Sandy Alcantara,9,15,0.0,3.0,SD,
+Lars Nootbaar,Will Warren,3,5,0.0,0.0,AZ,
+Zach McKinstry,Davis Martin,3,5,0.0,2.0,DET,
+Sam Antonacci,Troy Melton,4,8,1.0,1.0,CWS,
+Austin Riley,Hunter Brown,3,6,0.0,1.0,ATL,
+Taylor Ward,Tomoyuki Sugano,3,6,0.0,2.0,SEA,
+Tristan Peters,Troy Melton,3,6,0.0,0.0,CWS,
+Willson Contreras,Griffin Jax,2,4,2.0,4.0,BOS,
+Ronald Acuña Jr.,Hunter Brown,4,9,0.0,0.0,ATL,
+Xander Bogaerts,Sandy Alcantara,6,14,1.0,2.0,SD,
+Alec Burleson,Jake Irvin,3,7,1.0,2.0,STL,
+Nick Fortes,Patrick Sandoval,3,7,1.0,2.0,TB,
+Riley Greene,Davis Martin,5,12,0.0,1.0,DET,
+José Caballero,Corbin Burnes,4,10,0.0,1.0,NYY,
+Dominic Smith,Hunter Brown,2,5,0.0,0.0,ATL,
+J.P. Crawford,Tomoyuki Sugano,2,5,0.0,0.0,SEA,
+Seiya Suzuki,Rhett Lowder,2,5,0.0,0.0,CHC,
+Vladimir Guerrero Jr.,Jacob deGrom,3,8,0.0,1.0,TOR,
+Juan Soto,Cristopher Sánchez,6,17,0.0,0.0,NYM,
+Mark Vientos,Cristopher Sánchez,6,17,2.0,6.0,NYM,
+Chase Meidroth,Troy Melton,2,6,0.0,0.0,CWS,
+Trevor Story,Griffin Jax,2,6,0.0,0.0,BOS,
+Brett Bateman,Chris Bassitt,2,3,0.0,0.0,TOR,
+Carter Jensen,Anthony Kay,2,3,0.0,2.0,KC,
+Garrett Mitchell,Zack Wheeler,2,3,0.0,1.0,MIL,
+Griffin Conine,Shota Imanaga,2,3,0.0,0.0,MIA,
+Jordan Walker,Jared Jones,2,3,0.0,0.0,STL,
+José Fermín,Jared Jones,2,3,0.0,0.0,STL,
+Masyn Winn,Jared Jones,2,3,0.0,1.0,STL,
+Roman Anthony,Parker Messick,2,3,0.0,0.0,BOS,
+Jorge Mateo,Carlos Rodón,4,7,1.0,1.0,TB — G1,
+Nolan Arenado,Kyle Freeland,5,10,0.0,1.0,AZ,
+Geraldo Perdomo,Kyle Freeland,3,6,0.0,0.0,AZ,
+Lars Nootbaar,Kyle Freeland,3,6,1.0,3.0,AZ,
+Brandon Lowe,Andre Pallante,2,4,0.0,1.0,PIT,
+Dylan Beavers,Max Scherzer,2,4,1.0,3.0,BAL,
+Ezequiel Tovar,Michael Soroka,2,4,0.0,1.0,COL,
+Ben Rice,Nick Martinez,3,7,0.0,2.0,NYY — G1,
+Cal Raleigh,Cristian Javier,3,7,1.0,4.0,SEA,
+Colton Cowser,Max Scherzer,3,7,2.0,4.0,BAL,
+Corbin Carroll,Kyle Freeland,5,12,1.0,2.0,AZ,
+Gunnar Henderson,Max Scherzer,4,10,0.0,2.0,BAL,
+Austin Wells,Nick Martinez,2,5,2.0,2.0,NYY — G1,
+Ildemaro Vargas,Kyle Freeland,2,5,0.0,1.0,AZ,
+Kazuma Okamoto,Chris Bassitt,2,5,1.0,1.0,TOR,
+Maikel Garcia,Anthony Kay,2,5,0.0,0.0,KC,
+Myles Straw,Chris Bassitt,5,13,0.0,1.0,TOR,
+Jose Altuve,Logan Gilbert,15,40,2.0,2.0,HOU,
+Jonah Heim,Yusei Kikuchi,6,16,0.0,5.0,ATH,
+Jake Burger,Sean Manaea,3,8,2.0,3.0,TEX,
+Miguel Vargas,Daniel Lynch IV,3,8,0.0,1.0,CWS,
+Spencer Horwitz,Andre Pallante,3,8,1.0,1.0,PIT,
+Troy Johnston,Michael Soroka,3,8,0.0,1.0,COL,
+George Springer,Chris Bassitt,9,26,2.0,3.0,TOR,
+Ketel Marte,Kyle Freeland,17,51,3.0,6.0,AZ,
+Corey Seager,Sean Manaea,3,9,1.0,1.0,TEX,
+Mark Vientos,MacKenzie Gore,3,9,1.0,1.0,NYM,
+Bobby Witt Jr.,Anthony Kay,2,6,0.0,1.0,KC,
+Jared Triolo,Andre Pallante,2,6,0.0,0.0,PIT,
+Jonny DeLuca,Max Fried,2,6,0.0,3.0,TB — G2,
+Nathan Lukes,Chris Bassitt,2,6,0.0,0.0,TOR,
+Anthony Volpe,Freddy Peralta,2,4,1.0,1.0,NYY,
+Cody Bellinger,Freddy Peralta,6,14,1.0,3.0,NYY,
+Ben Rice,Freddy Peralta,2,5,1.0,1.0,NYY,
+Eugenio Suárez,Tyler Mahle,3,3,1.0,1.0,CIN,
+Henry Bolte,Peter Lambert,3,3,0.0,0.0,ATH,
+David Fry,Ranger Suárez,4,5,0.0,2.0,CLE,
+Jake Mangum,Kyle Leahy,3,4,0.0,0.0,PIT,
+Trea Turner,Bryse Wilson,3,4,0.0,2.0,PHI,
+Chase DeLauter,Ranger Suárez,2,3,0.0,1.0,CLE,
+Garrett Mitchell,Andrew Painter,2,3,0.0,0.0,MIL,
+JJ Wetherholt,Paul Skenes,2,3,1.0,1.0,STL,
+Sal Stewart,Tyler Mahle,2,3,2.0,6.0,CIN,
+Zack Gelof,Peter Lambert,2,3,0.0,0.0,ATH,
+José Ramírez,Ranger Suárez,5,8,0.0,1.0,CLE,
+Andrew Benintendi,Randy Dobnak,3,5,2.0,2.0,CWS,
+Cody Bellinger,Ian Seymour,3,5,1.0,2.0,NYY,
+Ronald Acuña Jr.,Brady Singer,3,5,1.0,1.0,ATL,
+Tyrone Taylor,Tyler Phillips,3,5,1.0,2.0,CHC,
+Ke’Bryan Hayes,Tyler Mahle,7,12,1.0,3.0,CIN,
+Ben Rice,Ian Seymour,3,6,2.0,4.0,NYY,
+Brandon Lowe,Kyle Leahy,2,4,1.0,1.0,PIT,
+Michael Conforto,Tyler Phillips,2,4,0.0,0.0,CHC,
+Ryan O’Hearn,Kyle Leahy,2,4,1.0,2.0,PIT,
+Sean Murphy,Brady Singer,5,11,2.0,5.0,ATL,
+J.T. Realmuto,Bryse Wilson,3,7,0.0,3.0,PHI,
+Nick Gonzales,Kyle Leahy,3,7,0.0,1.0,PIT,
+Taylor Walls,Cam Schlittler,3,7,0.0,0.0,TB,
+Will Smith,Nick Pivetta,3,7,1.0,4.0,LAD,
+Alec Burleson,Paul Skenes,8,20,0.0,5.0,STL,
+Jake McCarthy,Eduardo Rodriguez,2,5,0.0,1.0,COL,
+James McCann,Tanner Gordon,2,5,0.0,2.0,AZ,
+Jo Adell,Ranger Suárez,2,5,0.0,1.0,CLE,
+Richie Palacios,Cam Schlittler,2,5,0.0,2.0,TB,
+Freddie Freeman,Nick Pivetta,16,41,2.0,8.0,LAD,
+Oneil Cruz,Kyle Leahy,3,8,1.0,1.0,PIT,
+Chandler Simpson,Cam Schlittler,4,12,0.0,1.0,TB,
+Jordan Beck,Eduardo Rodriguez,3,9,0.0,1.0,COL,
+Bryce Harper,Bryse Wilson,2,6,1.0,3.0,PHI,
+Edmundo Sosa,Bryse Wilson,2,6,0.0,1.0,PHI,
+Enrique Hernández,Nick Pivetta,2,6,0.0,1.0,LAD,
+Ketel Marte,Tanner Gordon,2,6,0.0,1.0,AZ,
+Mickey Moniak,Eduardo Rodriguez,2,6,0.0,1.0,COL,
+Ezequiel Tovar,Eduardo Rodriguez,5,16,0.0,2.0,COL,
+Shohei Ohtani,Nick Pivetta,5,16,2.0,3.0,LAD,
+Ronald Acuña Jr.,Eury Pérez,4,9,,,ATL,
+Drake Baldwin,Eury Pérez,4,9,,,ATL,
+Michael Harris II,Eury Pérez,4,9,,,ATL,
+Austin Riley,Eury Pérez,3,7,,,ATL,
+Dominic Smith,Eury Pérez,3,7,,,ATL,
+Mauricio Dubón,Eury Pérez,2,5,,,ATL,
+Adley Rutschman,Clay Holmes,2,4,,,BOS G1,
+Willson Contreras,Clay Holmes,5,11,,,BOS G1,
+Isiah Kiner-Falefa,Clay Holmes,3,7,,,BOS G1,
+Wilyer Abreu,Clay Holmes,2,5,,,BOS G1,
+Isiah Kiner-Falefa,David Peterson,3,5,,,BOS G2,
+Jarren Duran,David Peterson,2,4,,,BOS G2,
+Andruw Monasterio,David Peterson,2,5,,,BOS G2,
+Michael Busch,Brayan Bello,2,3,,,CHC G2,
+Nico Hoerner,Brayan Bello,3,6,,,CHC G2,
+Alex Bregman,Brayan Bello,3,7,,,CHC G2,
+José Ramírez,Noah Cameron,4,8,,,CLE,
+Isaac Collins,Gavin Williams,3,4,,,KC,
+Salvador Perez,Gavin Williams,7,20,,,KC,
+Josh Lowe,Bryce Miller,5,9,,,LAA,
+Adam Frazier,Bryce Miller,4,9,,,LAA,
+Mookie Betts,Yunior Marte,3,3,,,LAD,
+Will Smith,Yunior Marte,2,3,,,LAD,
+Christian Yelich,Michael McGreevy,3,6,,,MIL,
+Jake Bauers,Michael McGreevy,2,4,,,MIL,
+Garrett Mitchell,Michael McGreevy,2,5,,,MIL,
+Francisco Lindor,Andrew Alvarez,2,4,,,NYM,
+Juan Soto,Andrew Alvarez,2,4,,,NYM,
+Heliot Ramos,Trevor Rogers,3,6,,,NYY G1,
+Austin Wells,Trevor Rogers,2,4,,,NYY G1,
+Ryan McMahon,Trevor Rogers,2,6,,,NYY G1,
+Ben Rice,Brandon Young,2,3,,,NYY G2,
+Luis García Jr.,Brandon Young,3,5,,,NYY G2,
+Edmundo Sosa,Freddy Peralta,2,5,,,PHI,
+J.T. Realmuto,Freddy Peralta,4,12,,,PHI,
+Bryce Harper,Freddy Peralta,5,16,,,PHI,
+Jake Cronenworth,Brandon Pfaadt,11,27,,,SD,
+Luis Campusano,Brandon Pfaadt,3,8,,,SD,
+Julio Rodríguez,Reid Detmers,6,15,,,SEA,
+J.P. Crawford,Reid Detmers,9,23,,,SEA,
+Randy Arozarena,Reid Detmers,5,16,,,SEA,
+Jordan Walker,Robert Gasser,2,4,,,STL,
+Iván Herrera,Robert Gasser,2,4,,,STL,
